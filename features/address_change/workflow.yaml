@@ -1,0 +1,142 @@
+# Address Change Workflow
+# Customer service chatbot for updating account addresses
+
+workflow:
+  name: address-change
+  description: Allow customers to update their account address
+  model: gpt-4o
+  
+  # Global edge - available from ANY node in this workflow
+  global_edges:
+    - trigger: llm_intent
+      intent: transfer_support
+      to: human_handoff
+
+  guardrails:
+    mandatory:
+      - pii_detection
+      - harmful_content_filter
+    optional:
+      - address_validation
+
+  nodes:
+    - id: greet
+      type: llm_response
+      prompt_template: "greeting.jinja2"
+      
+    - id: verify_identity
+      type: auth_challenge
+      config:
+        method: account_number_dob
+        max_attempts: 3
+        
+    - id: human_handoff
+      type: platform.human_handoff
+      
+    - id: change_address
+      type: subgraph
+      subgraph: address_change_flow
+      
+    - id: farewell
+      type: llm_response
+      prompt_template: "farewell.jinja2"
+
+  edges:
+    - from: START
+      to: greet
+    - from: greet
+      to: verify_identity
+
+  conditional_edges:
+    - from: verify_identity
+      router: llm_intent
+      routes:
+        change_address: change_address
+        other: greet
+
+    - from: change_address
+      router: direct
+      to: farewell
+
+# ─────────────────────────────────────────────────────────
+# SUBGRAPH: Address Change Flow
+# ─────────────────────────────────────────────────────────
+subgraphs:
+  address_change_flow:
+    description: Multi-step flow to collect, validate, and save new address
+    
+    nodes:
+      - id: collect_address
+        type: llm_conversation
+        prompt_template: "collect_address.jinja2"
+        output_schema: AddressSchema
+        
+      - id: validate_address
+        type: custom
+        handler: "features.address_change.handlers.validate_with_usps"
+        
+      - id: show_confirmation
+        type: llm_response
+        prompt_template: "confirm_address.jinja2"
+        
+      - id: save_address
+        type: custom
+        handler: "features.address_change.handlers.update_address_in_crm"
+        
+      - id: confirm_success
+        type: llm_response
+        prompt_template: "address_updated.jinja2"
+
+    edges:
+      - from: START
+        to: collect_address
+
+    conditional_edges:
+      - from: collect_address
+        router: llm_intent
+        routes:
+          address_provided: validate_address
+          need_clarification: collect_address
+          
+      - from: validate_address
+        router: validation_result
+        routes:
+          valid: show_confirmation
+          invalid: collect_address
+          
+      - from: show_confirmation
+        router: llm_intent
+        routes:
+          confirmed: save_address
+          edit: collect_address
+          
+      - from: save_address
+        router: direct
+        to: confirm_success
+        
+      - from: confirm_success
+        router: direct
+        to: END
+
+# ─────────────────────────────────────────────────────────
+# SCHEMAS: Structured output definitions
+# ─────────────────────────────────────────────────────────
+schemas:
+  AddressSchema:
+    type: object
+    properties:
+      street_address:
+        type: string
+        description: Street address including unit/apt number
+      city:
+        type: string
+      state:
+        type: string
+        pattern: "^[A-Z]{2}$"
+      zip_code:
+        type: string
+        pattern: "^\\d{5}(-\\d{4})?$"
+      address_type:
+        type: string
+        enum: [mailing, residential, both]
+    required: [street_address, city, state, zip_code]

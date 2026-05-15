@@ -1,0 +1,306 @@
+# Card Replacement Workflow
+# Customer service chatbot for replacing lost/stolen/damaged cards
+
+workflow:
+  name: card-replacement
+  description: Allow customers to request replacement cards (credit, debit, insurance)
+  model: gpt-4o
+  
+  global_edges:
+    - trigger: llm_intent
+      intent: transfer_support
+      to: human_handoff
+
+  guardrails:
+    mandatory:
+      - pii_detection
+      - harmful_content_filter
+      - pii_redaction  # protect card numbers
+    optional:
+      - fraud_detection
+
+  nodes:
+    - id: greet
+      type: llm_response
+      prompt_template: "greeting.jinja2"
+      
+    - id: verify_identity
+      type: auth_challenge
+      config:
+        method: account_number_ssn_last4
+        max_attempts: 3
+        
+    - id: human_handoff
+      type: platform.human_handoff
+      
+    - id: replace_card
+      type: subgraph
+      subgraph: card_replacement_flow
+      
+    - id: track_card
+      type: subgraph
+      subgraph: card_tracking_flow
+      
+    - id: farewell
+      type: llm_response
+      prompt_template: "farewell.jinja2"
+
+  edges:
+    - from: START
+      to: greet
+    - from: greet
+      to: verify_identity
+
+  conditional_edges:
+    - from: verify_identity
+      router: llm_intent
+      routes:
+        replace_card: replace_card
+        track_replacement: track_card
+        other: greet
+
+    - from: replace_card
+      router: direct
+      to: farewell
+      
+    - from: track_card
+      router: direct
+      to: farewell
+
+# ─────────────────────────────────────────────────────────
+# SUBGRAPH: Card Replacement Flow
+# ─────────────────────────────────────────────────────────
+subgraphs:
+  card_replacement_flow:
+    description: Multi-step flow to identify card, reason, and process replacement
+    
+    nodes:
+      - id: identify_card
+        type: llm_conversation
+        prompt_template: "identify_card.jinja2"
+        output_schema: CardIdentificationSchema
+        
+      - id: get_replacement_reason
+        type: llm_conversation
+        prompt_template: "replacement_reason.jinja2"
+        output_schema: ReplacementReasonSchema
+        
+      - id: stolen_card_action
+        type: custom
+        handler: "features.card_replacement.handlers.block_stolen_card"
+        # Immediately blocks the card and flags for fraud review
+        
+      - id: confirm_shipping_address
+        type: llm_conversation
+        prompt_template: "confirm_address.jinja2"
+        output_schema: ShippingAddressSchema
+        
+      - id: select_delivery_speed
+        type: llm_conversation
+        prompt_template: "delivery_options.jinja2"
+        output_schema: DeliveryOptionsSchema
+        
+      - id: check_replacement_fee
+        type: custom
+        handler: "features.card_replacement.handlers.calculate_replacement_fee"
+        
+      - id: show_fee_confirmation
+        type: llm_response
+        prompt_template: "fee_confirmation.jinja2"
+        
+      - id: process_replacement
+        type: custom
+        handler: "features.card_replacement.handlers.create_card_replacement_order"
+        
+      - id: replacement_confirmed
+        type: llm_response
+        prompt_template: "replacement_confirmation.jinja2"
+        
+      - id: fraud_escalation
+        type: platform.human_handoff
+        config:
+          priority: high
+          reason: potential_fraud
+
+    edges:
+      - from: START
+        to: identify_card
+
+    conditional_edges:
+      - from: identify_card
+        router: llm_intent
+        routes:
+          card_identified: get_replacement_reason
+          multiple_cards: identify_card  # clarify which card
+          no_cards_found: END
+          
+      - from: get_replacement_reason
+        router: reason_routing
+        routes:
+          lost: confirm_shipping_address
+          stolen: stolen_card_action
+          damaged: confirm_shipping_address
+          expired: confirm_shipping_address
+          fraud_suspected: fraud_escalation
+          
+      - from: stolen_card_action
+        router: block_result
+        routes:
+          blocked: confirm_shipping_address
+          error: fraud_escalation
+          
+      - from: confirm_shipping_address
+        router: llm_intent
+        routes:
+          address_confirmed: select_delivery_speed
+          update_address: confirm_shipping_address
+          
+      - from: select_delivery_speed
+        router: llm_intent
+        routes:
+          speed_selected: check_replacement_fee
+          questions: select_delivery_speed
+          
+      - from: check_replacement_fee
+        router: fee_result
+        routes:
+          fee_applies: show_fee_confirmation
+          no_fee: process_replacement
+          
+      - from: show_fee_confirmation
+        router: llm_intent
+        routes:
+          accepted: process_replacement
+          declined: END
+          
+      - from: process_replacement
+        router: order_result
+        routes:
+          success: replacement_confirmed
+          error: END
+          
+      - from: replacement_confirmed
+        router: direct
+        to: END
+
+  # ─────────────────────────────────────────────────────────
+  # SUBGRAPH: Card Tracking Flow
+  # ─────────────────────────────────────────────────────────
+  card_tracking_flow:
+    description: Allow users to track status of replacement card shipment
+    
+    nodes:
+      - id: get_tracking_info
+        type: custom
+        handler: "features.card_replacement.handlers.get_active_card_orders"
+        
+      - id: no_active_orders
+        type: llm_response
+        prompt_template: "no_active_orders.jinja2"
+        
+      - id: display_tracking
+        type: llm_response
+        prompt_template: "card_tracking_status.jinja2"
+        
+      - id: request_expedite
+        type: custom
+        handler: "features.card_replacement.handlers.expedite_card_shipment"
+        
+      - id: expedite_confirmed
+        type: llm_response
+        prompt_template: "expedite_confirmation.jinja2"
+
+    edges:
+      - from: START
+        to: get_tracking_info
+
+    conditional_edges:
+      - from: get_tracking_info
+        router: tracking_result
+        routes:
+          found: display_tracking
+          not_found: no_active_orders
+          
+      - from: display_tracking
+        router: llm_intent
+        routes:
+          expedite: request_expedite
+          satisfied: END
+          
+      - from: request_expedite
+        router: expedite_result
+        routes:
+          success: expedite_confirmed
+          not_available: display_tracking
+          
+      - from: expedite_confirmed
+        router: direct
+        to: END
+        
+      - from: no_active_orders
+        router: direct
+        to: END
+
+# ─────────────────────────────────────────────────────────
+# SCHEMAS: Structured output definitions
+# ─────────────────────────────────────────────────────────
+schemas:
+  CardIdentificationSchema:
+    type: object
+    properties:
+      card_type:
+        type: string
+        enum: [credit, debit, insurance, membership]
+      card_last_four:
+        type: string
+        pattern: "^\\d{4}$"
+      card_name:
+        type: string
+        description: Name on the card or card product name
+    required: [card_type]
+
+  ReplacementReasonSchema:
+    type: object
+    properties:
+      reason:
+        type: string
+        enum: [lost, stolen, damaged, expired, name_change, fraud_suspected]
+      additional_details:
+        type: string
+        maxLength: 500
+      last_used_date:
+        type: string
+        format: date
+        description: When the card was last used (for stolen cards)
+    required: [reason]
+
+  ShippingAddressSchema:
+    type: object
+    properties:
+      use_address_on_file:
+        type: boolean
+      street_address:
+        type: string
+      city:
+        type: string
+      state:
+        type: string
+        pattern: "^[A-Z]{2}$"
+      zip_code:
+        type: string
+        pattern: "^\\d{5}(-\\d{4})?$"
+    required: [use_address_on_file]
+
+  DeliveryOptionsSchema:
+    type: object
+    properties:
+      delivery_speed:
+        type: string
+        enum: [standard, expedited, overnight]
+      estimated_delivery:
+        type: string
+        description: Estimated delivery date range
+      fee:
+        type: number
+        description: Delivery fee in dollars
+    required: [delivery_speed]
