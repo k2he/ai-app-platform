@@ -18,7 +18,7 @@ workflow:
   guardrails:
     mandatory:
       - pii_detection
-      - harmful_content_filter
+      - max_length_check       # block inputs over 250 words
     optional:
       - document_verification
 

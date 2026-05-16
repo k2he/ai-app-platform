@@ -18,8 +18,8 @@ workflow:
   guardrails:
     mandatory:
       - pii_detection
-      - harmful_content_filter
-      - pii_redaction  # protect card numbers
+      - max_length_check       # block inputs over 250 words
+      - pii_redaction          # protect card numbers
     optional:
       - fraud_detection
 

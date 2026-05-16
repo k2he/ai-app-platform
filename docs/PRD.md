@@ -3,6 +3,33 @@
 **Version:** 1.0  
 **Date:** May 15, 2026  
 **Status:** Draft  
+**Type:** Demo / Proof-of-Concept  
+
+---
+
+## Demo Scope & Implementation Depth
+
+> **This is a demo/proof-of-concept project.** The goal is to validate the platform architecture and workflow engine — not to ship production-ready integrations for every module.
+
+### Implementation Depth by Module
+
+| Module | Depth | What to Implement |
+|--------|-------|-------------------|
+| **Workflow Engine** | ✅ Full | YAML parser, graph builder, node executor, state manager — this is the core of the platform |
+| **Guardrails** | ✅ Working examples | Implement **PII detection** (Presidio-based) and **max length check** (block inputs over 250 words). Enough to demonstrate the guardrail pipeline, registry pattern, and how teams enable/disable them. |
+| **Langfuse** | 🔲 Stub/interface only | Define the tracing interface and decorators. Actual Langfuse client setup is deferred — use print/logging as placeholder. |
+| **Auth Module** | 🔲 Stub/interface only | Define the `auth_challenge` node interface. Implement a mock verifier that always succeeds (or checks hardcoded values). No real JWT/OAuth. |
+| **Human Handoff** | 🔲 Stub/interface only | Define the `human_handoff` node interface. Implementation logs the handoff event and returns a message — no real WebSocket/CRM integration. |
+| **LLM Provider** | ✅ Working | Implement OpenAI/Azure OpenAI provider with the abstraction layer. Other providers are stubs. |
+| **Tests** | 🔲 Deferred | No test cases for the demo. Testing strategy and examples below are kept as reference for future implementation. |
+
+### Implementation Depth by Feature
+
+| Feature | Depth | What to Implement |
+|---------|-------|-------------------|
+| **Card Replacement** | ✅ Full implementation | Complete workflow with all handlers, templates, subgraphs (replacement + tracking). This is the **reference feature** demonstrating the full platform capability. |
+| **Address Change** | 🔲 Minimal demo | Workflow YAML fully defined. Handlers return mock/hardcoded data. Templates are simple placeholders. Enough to show a second feature running on the platform. |
+| **Account Activation** | 🔲 Minimal demo | Same as address change — workflow YAML defined, stub handlers, placeholder templates. Demonstrates a third feature with different guardrails (document_verification). |
 
 ---
 
@@ -495,6 +522,8 @@ class CustomGuardrail:
 
 ## Testing Decisions
 
+> ⚠️ **Deferred for demo.** No test cases will be implemented in the initial demo. The strategy and examples below are kept as reference for future implementation.
+
 ### What Makes a Good Test
 
 Tests should verify **external behavior**, not implementation details:
@@ -601,19 +630,25 @@ The following are explicitly **out of scope** for the initial platform release:
 | Human handoff rate | < 15% | Track transfers per workflow |
 | Guardrail false positive rate | < 5% | Sample and review blocked conversations |
 
-### Phase 1 Deliverables
+### Phase 1 Deliverables (Demo)
 
 1. Platform engine (YAML parser, graph builder, node executor)
-2. Core node types (llm_response, llm_conversation, auth_challenge, human_handoff)
-3. Core routers (llm_intent, direct)
-4. Mandatory guardrails (pii_detection, harmful_content, prompt_injection)
-5. Langfuse integration
-6. Three feature workflows deployed:
-   - Address Change
-   - Account Activation
-   - Card Replacement
-7. Documentation and feature onboarding guide
-8. Modular architecture with clean boundaries for future library extraction
+2. Core node types (llm_response, llm_conversation, auth_challenge stub, human_handoff stub)
+3. Core routers (llm_intent, direct, validation_result)
+4. Guardrails — working implementations:
+   - `pii_detection` — Presidio-based PII detection
+   - `max_length_check` — Blocks user input exceeding 250 words
+   - Guardrail pipeline, registry pattern, and per-feature enable/disable
+5. Langfuse — interface/stubs only (print/logging placeholder)
+6. Auth — mock verifier only (hardcoded values)
+7. Human handoff — stub that logs event and returns message
+8. **Card Replacement** — fully implemented (reference feature):
+   - All handlers with real business logic
+   - All Jinja2 templates
+   - Both subgraphs (replacement + tracking)
+9. **Address Change** — minimal demo (workflow YAML + stub handlers + placeholder templates)
+10. **Account Activation** — minimal demo (workflow YAML + stub handlers + placeholder templates)
+11. Documentation and feature onboarding guide
 
 ---
 
@@ -621,11 +656,9 @@ The following are explicitly **out of scope** for the initial platform release:
 
 See the following feature directories for complete implementations:
 
-- [Address Change Feature](../features/address_change/) — `workflow.yaml`, handlers, templates
-- [Account Activation Feature](../features/account_activation/) — `workflow.yaml`, handlers, templates
-- [Card Replacement Feature](../features/card_replacement/) — `workflow.yaml`, handlers, templates
-
-Each feature directory contains everything needed: workflow configuration, business logic handlers, and prompt templates.
+- [Card Replacement Feature](../features/card_replacement/) — ✅ **Fully implemented** reference feature (workflow.yaml, handlers, templates, both subgraphs)
+- [Address Change Feature](../features/address_change/) — 🔲 Minimal demo (workflow.yaml + stub handlers + placeholder templates)
+- [Account Activation Feature](../features/account_activation/) — 🔲 Minimal demo (workflow.yaml + stub handlers + placeholder templates)
 
 ---
 
