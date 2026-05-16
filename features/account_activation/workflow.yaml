@@ -4,8 +4,12 @@
 workflow:
   name: account-activation
   description: Allow customers to activate their accounts
-  model: gpt-4o
-  
+
+  llm:
+    provider: azure_openai
+    model: gpt-4o
+    temperature: 0.1
+
   global_edges:
     - trigger: llm_intent
       intent: transfer_support
@@ -22,20 +26,20 @@ workflow:
     - id: greet
       type: llm_response
       prompt_template: "greeting.jinja2"
-      
+
     - id: verify_identity
       type: auth_challenge
       config:
         method: account_number_ssn_last4
         max_attempts: 3
-        
+
     - id: human_handoff
       type: platform.human_handoff
-      
+
     - id: activate_account
       type: subgraph
       subgraph: activation_flow
-      
+
     - id: farewell
       type: llm_response
       prompt_template: "farewell.jinja2"
@@ -46,15 +50,14 @@ workflow:
     - from: greet
       to: verify_identity
 
-  conditional_edges:
     - from: verify_identity
       router: llm_intent
+      description: "What does the customer want to do?"
       routes:
         activate_account: activate_account
         other: greet
 
     - from: activate_account
-      router: direct
       to: farewell
 
 # ─────────────────────────────────────────────────────────
@@ -63,38 +66,38 @@ workflow:
 subgraphs:
   activation_flow:
     description: Multi-step flow to verify eligibility and activate account
-    
+
     nodes:
       - id: check_eligibility
         type: custom
         handler: "features.account_activation.handlers.check_activation_eligibility"
-        
+
       - id: already_active_msg
         type: llm_response
         prompt_template: "already_active.jinja2"
-        
+
       - id: blocked_msg
         type: llm_response
         prompt_template: "account_blocked.jinja2"
-        
+
       - id: collect_documents
         type: llm_conversation
         prompt_template: "request_documents.jinja2"
         output_schema: DocumentUploadSchema
-        
+
       - id: select_preferences
         type: llm_conversation
         prompt_template: "account_preferences.jinja2"
         output_schema: AccountPreferencesSchema
-        
+
       - id: confirm_activation
         type: llm_response
         prompt_template: "confirm_activation.jinja2"
-        
+
       - id: perform_activation
         type: custom
         handler: "features.account_activation.handlers.activate_account_in_system"
-        
+
       - id: activation_success
         type: llm_response
         prompt_template: "activation_complete.jinja2"
@@ -103,50 +106,50 @@ subgraphs:
       - from: START
         to: check_eligibility
 
-    conditional_edges:
       - from: check_eligibility
-        router: eligibility_result
+        router: validation_result
+        description: "Is the account eligible for activation?"
         routes:
           eligible: select_preferences
           already_active: already_active_msg
           blocked: blocked_msg
           pending_documents: collect_documents
-          
+
       - from: already_active_msg
-        router: direct
         to: END
-        
       - from: blocked_msg
-        router: direct
         to: END
-        
+
       - from: collect_documents
         router: llm_intent
+        description: "Did the customer provide required documents?"
         routes:
           documents_provided: check_eligibility
           need_help: END
-          
+
       - from: select_preferences
         router: llm_intent
+        description: "Did the customer set their account preferences?"
         routes:
           preferences_set: confirm_activation
           questions: select_preferences
-          
+
       - from: confirm_activation
         router: llm_intent
+        description: "Did the customer confirm activation?"
         routes:
           confirmed: perform_activation
           cancel: END
           edit_preferences: select_preferences
-          
+
       - from: perform_activation
-        router: activation_result
+        router: validation_result
+        description: "Did the activation succeed?"
         routes:
           success: activation_success
           error: END
-          
+
       - from: activation_success
-        router: direct
         to: END
 
 # ─────────────────────────────────────────────────────────

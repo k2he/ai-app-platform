@@ -4,8 +4,12 @@
 workflow:
   name: card-replacement
   description: Allow customers to request replacement cards (credit, debit, insurance)
-  model: gpt-4o
-  
+
+  llm:
+    provider: azure_openai
+    model: gpt-4o
+    temperature: 0.1
+
   global_edges:
     - trigger: llm_intent
       intent: transfer_support
@@ -23,24 +27,24 @@ workflow:
     - id: greet
       type: llm_response
       prompt_template: "greeting.jinja2"
-      
+
     - id: verify_identity
       type: auth_challenge
       config:
         method: account_number_ssn_last4
         max_attempts: 3
-        
+
     - id: human_handoff
       type: platform.human_handoff
-      
+
     - id: replace_card
       type: subgraph
       subgraph: card_replacement_flow
-      
+
     - id: track_card
       type: subgraph
       subgraph: card_tracking_flow
-      
+
     - id: farewell
       type: llm_response
       prompt_template: "farewell.jinja2"
@@ -51,20 +55,17 @@ workflow:
     - from: greet
       to: verify_identity
 
-  conditional_edges:
     - from: verify_identity
       router: llm_intent
+      description: "What does the customer need help with?"
       routes:
         replace_card: replace_card
         track_replacement: track_card
         other: greet
 
     - from: replace_card
-      router: direct
       to: farewell
-      
     - from: track_card
-      router: direct
       to: farewell
 
 # ─────────────────────────────────────────────────────────
@@ -73,49 +74,48 @@ workflow:
 subgraphs:
   card_replacement_flow:
     description: Multi-step flow to identify card, reason, and process replacement
-    
+
     nodes:
       - id: identify_card
         type: llm_conversation
         prompt_template: "identify_card.jinja2"
         output_schema: CardIdentificationSchema
-        
+
       - id: get_replacement_reason
         type: llm_conversation
         prompt_template: "replacement_reason.jinja2"
         output_schema: ReplacementReasonSchema
-        
+
       - id: stolen_card_action
         type: custom
         handler: "features.card_replacement.handlers.block_stolen_card"
-        # Immediately blocks the card and flags for fraud review
-        
+
       - id: confirm_shipping_address
         type: llm_conversation
         prompt_template: "confirm_address.jinja2"
         output_schema: ShippingAddressSchema
-        
+
       - id: select_delivery_speed
         type: llm_conversation
         prompt_template: "delivery_options.jinja2"
         output_schema: DeliveryOptionsSchema
-        
+
       - id: check_replacement_fee
         type: custom
         handler: "features.card_replacement.handlers.calculate_replacement_fee"
-        
+
       - id: show_fee_confirmation
         type: llm_response
         prompt_template: "fee_confirmation.jinja2"
-        
+
       - id: process_replacement
         type: custom
         handler: "features.card_replacement.handlers.create_card_replacement_order"
-        
+
       - id: replacement_confirmed
         type: llm_response
         prompt_template: "replacement_confirmation.jinja2"
-        
+
       - id: fraud_escalation
         type: platform.human_handoff
         config:
@@ -126,61 +126,71 @@ subgraphs:
       - from: START
         to: identify_card
 
-    conditional_edges:
       - from: identify_card
         router: llm_intent
+        description: "Did the customer identify which card?"
         routes:
           card_identified: get_replacement_reason
-          multiple_cards: identify_card  # clarify which card
+          multiple_cards: identify_card
           no_cards_found: END
-          
+
       - from: get_replacement_reason
-        router: reason_routing
+        router: validation_result
+        description: "What is the replacement reason?"
         routes:
           lost: confirm_shipping_address
           stolen: stolen_card_action
           damaged: confirm_shipping_address
           expired: confirm_shipping_address
-          fraud_suspected: fraud_escalation
-          
+          fraud_suspected:
+            to: fraud_escalation
+            label: "Potential fraud detected, escalate to specialist"
+
       - from: stolen_card_action
-        router: block_result
+        router: validation_result
+        description: "Was the stolen card blocked successfully?"
         routes:
           blocked: confirm_shipping_address
-          error: fraud_escalation
-          
+          error:
+            to: fraud_escalation
+            label: "Failed to block card, escalate urgently"
+
       - from: confirm_shipping_address
         router: llm_intent
+        description: "Did the customer confirm shipping address?"
         routes:
           address_confirmed: select_delivery_speed
           update_address: confirm_shipping_address
-          
+
       - from: select_delivery_speed
         router: llm_intent
+        description: "Did the customer select delivery speed?"
         routes:
           speed_selected: check_replacement_fee
           questions: select_delivery_speed
-          
+
       - from: check_replacement_fee
-        router: fee_result
+        router: validation_result
+        description: "Does a replacement fee apply?"
         routes:
           fee_applies: show_fee_confirmation
           no_fee: process_replacement
-          
+
       - from: show_fee_confirmation
         router: llm_intent
+        description: "Did the customer accept the fee?"
         routes:
           accepted: process_replacement
           declined: END
-          
+
       - from: process_replacement
-        router: order_result
+        router: validation_result
+        description: "Was the replacement order created?"
         routes:
           success: replacement_confirmed
           error: END
-          
+
       - from: replacement_confirmed
-        router: direct
         to: END
 
   # ─────────────────────────────────────────────────────────
@@ -188,24 +198,24 @@ subgraphs:
   # ─────────────────────────────────────────────────────────
   card_tracking_flow:
     description: Allow users to track status of replacement card shipment
-    
+
     nodes:
       - id: get_tracking_info
         type: custom
         handler: "features.card_replacement.handlers.get_active_card_orders"
-        
+
       - id: no_active_orders
         type: llm_response
         prompt_template: "no_active_orders.jinja2"
-        
+
       - id: display_tracking
         type: llm_response
         prompt_template: "card_tracking_status.jinja2"
-        
+
       - id: request_expedite
         type: custom
         handler: "features.card_replacement.handlers.expedite_card_shipment"
-        
+
       - id: expedite_confirmed
         type: llm_response
         prompt_template: "expedite_confirmation.jinja2"
@@ -214,31 +224,30 @@ subgraphs:
       - from: START
         to: get_tracking_info
 
-    conditional_edges:
       - from: get_tracking_info
-        router: tracking_result
+        router: validation_result
+        description: "Are there active card orders?"
         routes:
           found: display_tracking
           not_found: no_active_orders
-          
+
       - from: display_tracking
         router: llm_intent
+        description: "Does the customer want to expedite?"
         routes:
           expedite: request_expedite
           satisfied: END
-          
+
       - from: request_expedite
-        router: expedite_result
+        router: validation_result
+        description: "Was expedite request successful?"
         routes:
           success: expedite_confirmed
           not_available: display_tracking
-          
+
       - from: expedite_confirmed
-        router: direct
         to: END
-        
       - from: no_active_orders
-        router: direct
         to: END
 
 # ─────────────────────────────────────────────────────────

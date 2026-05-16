@@ -1,269 +1,205 @@
-# Product Requirements Document: Agentic AI Application Platform
+# Product Requirements Document: AI Application Platform
 
-**Version:** 2.0  
+**Version:** 1.0  
 **Date:** May 15, 2026  
-**Status:** Draft
+**Status:** Draft  
 
 ---
 
-## 1. Executive Summary
+## Problem Statement
 
-Build a **shared Python platform** that enables multiple teams within an insurance/financial services organization to rapidly develop agentic AI chatbots using **LangGraph** and **Langfuse**. The platform provides all cross-cutting concerns (guardrails, observability, authentication, human handoff) as configurable, overridable modules — so feature teams write **only business logic** while inheriting production-grade infrastructure.
+Enterprise teams in insurance and financial services organizations want to build agentic AI applications (customer service chatbots) but face significant barriers:
 
----
+1. **Duplicated effort** — Each team rebuilds common capabilities (guardrails, authentication, observability, human handoff) from scratch
+2. **AI expertise required** — Teams need deep knowledge of LangGraph, LLM orchestration, and AI deployment patterns
+3. **Inconsistent security** — PII detection, content filtering, and compliance controls vary across applications
+4. **No observability standard** — Each team implements their own logging/tracing, making cross-application monitoring difficult
+5. **Slow time-to-market** — Building foundational infrastructure delays business value delivery
 
-## 2. Problem Statement
-
-| Pain Point | Impact |
-|---|---|
-| Each team rebuilds guardrails, auth, tracing from scratch | 3–6 month lead time per chatbot |
-| Inconsistent PII handling across applications | Compliance & audit risk |
-| Teams need deep LangGraph/LLM deployment knowledge | High hiring bar, slow onboarding |
-| No standard observability | Debugging conversations is ad-hoc |
-| Shared behaviors (human handoff) reimplemented per app | Code drift, inconsistent UX |
-
-**Desired outcome:** A team with domain expertise (e.g., "how to change an address in our CRM") can ship a production chatbot in **2–4 weeks** by writing **< 200 lines of Python** — no AI infrastructure expertise required.
+Development teams should focus on their **business logic** (address changes, account activation, card replacement) while the platform handles cross-cutting concerns. The codebase is organized by **features**, not by team names, enabling clean separation and future multi-repository extraction.
 
 ---
 
-## 3. Goals & Non-Goals
+## Solution
 
-### Goals
+Build an **Agentic AI Application Platform** in a single repository where teams define workflows in **YAML configuration** and implement only their custom business logic in Python. The platform provides all common modules (guardrails, authentication, observability, LLM orchestration) as an internal library.
 
-1. Provide a **plugin-style architecture** where each feature is a self-contained directory (workflow config + handlers + prompts).
-2. Ship **shared modules** for: guardrails pipeline, Langfuse tracing, identity verification, human handoff, LLM provider abstraction.
-3. Allow teams to **override or extend** any shared module (swap guardrails, change auth method, pick different LLM) via configuration or subclassing.
-4. Use **YAML-driven workflow definitions** so teams declare LangGraph structure without writing graph-building code.
-5. Auto-discover and load feature plugins at runtime from a `features/` directory.
-6. Provide a CLI / entry-point to run any feature locally or deploy it.
+**Repository Organization:** The codebase is organized by **features** (address_change, account_activation, card_replacement), not by team names. This enables:
+- Clean separation of concerns
+- Feature ownership by different teams
+- Easy extraction to multi-repo when needed
 
-### Non-Goals (v1)
+**Phase 1:** All features in a single repository with modular platform architecture.  
+**Future:** The platform core can be extracted as a published library, enabling teams to work in separate repositories with their owned features.
 
-- Visual/drag-and-drop workflow builder
-- Real-time WebSocket live-agent bridge (we provide an abstract interface only)
-- Multi-language (English only in v1)
-- Fine-tuning infrastructure
-- Per-team billing/metering
+### Core Value Proposition
 
----
-
-## 4. Architecture
-
-### 4.1 High-Level Design
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        PLATFORM CORE (shared library)                 │
-│                                                                      │
-│  ┌────────────┐  ┌────────────┐  ┌──────────┐  ┌─────────────────┐  │
-│  │ Guardrails │  │  Langfuse  │  │   Auth   │  │  Human Handoff  │  │
-│  │  Pipeline  │  │  Tracing   │  │  Module  │  │   Interface     │  │
-│  └────────────┘  └────────────┘  └──────────┘  └─────────────────┘  │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │           WORKFLOW ENGINE                                       │  │
-│  │  YAML Parser → Graph Builder → Node Registry → State Manager   │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │           BUILT-IN NODE TYPES                                   │  │
-│  │  llm_response │ llm_conversation │ auth_challenge │ subgraph   │  │
-│  │  human_handoff │ custom (user handler)                          │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │           ROUTER TYPES                                          │  │
-│  │  llm_intent │ direct │ validation_result │ custom               │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │           LLM PROVIDER ABSTRACTION                              │  │
-│  │  OpenAI │ Anthropic │ Azure OpenAI │ Bedrock (pluggable)        │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        ▼                     ▼                     ▼
-┌───────────────┐   ┌───────────────┐   ┌───────────────┐
-│ address_change│   │ account_activ.│   │card_replacement│
-│  workflow.yaml│   │  workflow.yaml│   │  workflow.yaml │
-│  handlers.py  │   │  handlers.py  │   │  handlers.py   │
-│  prompts/     │   │  prompts/     │   │  prompts/      │
-└───────────────┘   └───────────────┘   └───────────────┘
-```
-
-### 4.2 Key Design Decisions
-
-| Decision | Rationale |
-|---|---|
-| **YAML workflow definitions** | Declarative; teams don't learn LangGraph internals; schema-validatable |
-| **Plugin directory convention** (`features/<name>/`) | Auto-discovery, self-contained, easy to extract to separate repo later |
-| **Layered guardrails** (mandatory → optional → custom) | Platform enforces compliance minimums; teams add domain-specific rules |
-| **Handler interface (async function)** | Simplest contract — pure function of `(state, config) → result` |
-| **UV for package management** | Fast, reproducible; single lockfile; workspace support for monorepo |
-| **Single repo first, extractable later** | Fastest iteration now; clear module boundaries enable future library extraction |
-
-### 4.3 Customization Model
-
-The platform uses a **"convention over configuration, override anything"** approach:
-
-```
-Priority (highest → lowest):
-  1. Feature-level override (in workflow.yaml or handlers.py)
-  2. Feature-level config (guardrails.optional, model selection)
-  3. Platform defaults (mandatory guardrails, default model, default auth)
-```
-
-**What teams can customize:**
-
-| Aspect | How to Customize |
-|---|---|
-| LLM model | `model:` field in workflow.yaml |
-| Guardrails | Enable/disable optional; add custom guardrail classes |
-| Auth method | `config.method:` on auth_challenge node |
-| Node behavior | Write a `custom` handler function |
-| Routing logic | Provide a custom router function |
-| Prompts | Jinja2 templates in feature's `prompts/` directory |
-| State schema | Define `schemas:` section in workflow.yaml |
-| Human handoff | Override handoff adapter class |
+| Without Platform | With Platform |
+|------------------|---------------|
+| Teams write ~2000+ lines of LangGraph boilerplate | Teams write ~50-100 lines of custom Python |
+| Each team implements guardrails differently | Platform enforces consistent security controls |
+| No standard observability | Built-in Langfuse tracing for all applications |
+| 3-6 months to deploy a chatbot | 2-4 weeks to deploy a chatbot |
+| Deep AI/ML expertise required | Business logic expertise sufficient |
 
 ---
 
-## 5. Technology Stack
+## User Stories
 
-| Component | Technology | Why |
-|---|---|---|
-| Workflow orchestration | **LangGraph** | Industry-standard for stateful agentic graphs; supports subgraphs, conditional edges, interrupts |
-| Observability | **Langfuse** | Purpose-built LLM tracing; prompt management; evaluations; cost tracking |
-| Guardrails | **Guardrails AI** (structural validation) + **LangChain/custom** (content filtering) | Best-of-breed: Guardrails AI for schema enforcement, custom pipeline for PII/toxicity |
-| Language | **Python 3.11+** | LangGraph/Langfuse ecosystem; team familiarity |
-| Package mgmt | **UV** | Fast resolver, workspace support, reproducible builds |
-| Config format | **YAML** (with JSON Schema validation) | Human-readable, git-diffable |
-| LLM providers | OpenAI, Anthropic, Azure OpenAI (via LangChain chat models) | Unified interface, swap via config |
-| Testing | **pytest + pytest-asyncio** | Standard; supports async handlers |
+### Platform Team (Builders)
 
----
+1. As a **platform engineer**, I want to define reusable node types (llm_response, auth_challenge, human_handoff), so that application teams don't reinvent common patterns.
+2. As a **platform engineer**, I want to configure mandatory guardrails at the platform level, so that all applications meet compliance requirements.
+3. As a **platform engineer**, I want to build the platform as an internal library/module, so that it can be extracted as a published package in the future.
+4. As a **platform engineer**, I want to provide a workflow schema validator, so that teams get immediate feedback on configuration errors.
+5. As a **platform engineer**, I want to version platform components independently of feature implementations, so that features can be updated without platform changes.
+6. As a **security engineer**, I want to enforce PII detection and redaction across all applications, so that sensitive data is never exposed to LLMs inappropriately.
+7. As a **security engineer**, I want certain guardrails to be non-overridable, so that features cannot accidentally disable critical protections.
+8. As a **DevOps engineer**, I want to support both shared and isolated deployments, so that features can be deployed based on their requirements.
+9. As a **platform engineer**, I want clear module boundaries between platform and features, so that future extraction to separate repos is straightforward.
 
-## 6. Guardrails Architecture (Deep Dive)
+### Application Teams (Users)
 
-Guardrails are the platform's most critical shared module. The design must balance **mandatory compliance** with **team flexibility**.
+10. As an **application developer**, I want to define my workflow in YAML, so that I don't need to learn LangGraph internals.
+11. As an **application developer**, I want to write only my business logic handlers in Python, so that I can focus on domain expertise.
+12. As an **application developer**, I want to use LLM-based routing for conditional edges, so that my chatbot can dynamically respond to user intent.
+13. As an **application developer**, I want to define subgraphs for complex flows, so that I can organize multi-step processes cleanly.
+14. As an **application developer**, I want to specify which LLM model my workflow uses, so that I can balance cost and capability.
+15. As an **application developer**, I want to add team-specific guardrails on top of platform defaults, so that I can enforce domain-specific rules.
+16. As an **application developer**, I want to override optional guardrails when my use case requires it, so that I have flexibility within safety bounds.
+17. As an **application developer**, I want to use platform-provided prompt templates, so that I maintain consistent user experience.
+18. As an **application developer**, I want to define structured output schemas, so that LLM responses are typed and validated.
+19. As an **application developer**, I want global edges for human handoff, so that users can transfer to support from any point in the conversation.
+20. As an **application developer**, I want to reuse platform authentication modules, so that I don't implement identity verification myself.
 
-### 6.1 Three-Tier Pipeline
+### End Users (Customers)
 
-```
-Input (user message)
-  │
-  ▼
-┌─────────────────────────────────────────────────────┐
-│ TIER 1: MANDATORY (platform-enforced, non-removable)│
-│  • pii_detection — flag SSN, credit card, DOB       │
-│  • harmful_content — block toxic/violent/illegal     │
-│  • prompt_injection — detect jailbreak attempts      │
-└─────────────────────────────────────────────────────┘
-  │
-  ▼
-┌─────────────────────────────────────────────────────┐
-│ TIER 2: OPTIONAL (platform-provided, team toggles)  │
-│  • pii_redaction — mask detected PII before LLM     │
-│  • address_format_validation                        │
-│  • fraud_signal_detection                           │
-│  • document_verification                            │
-└─────────────────────────────────────────────────────┘
-  │
-  ▼
-┌─────────────────────────────────────────────────────┐
-│ TIER 3: CUSTOM (team-defined, additive)             │
-│  • Domain-specific validators                       │
-│  • Business rule checks                             │
-└─────────────────────────────────────────────────────┘
-  │
-  ▼
-Output → LLM / next node
-```
+21. As a **customer**, I want to change my address through the chatbot, so that I don't have to call customer service.
+22. As a **customer**, I want to activate my account through the chatbot, so that I can start using services immediately.
+23. As a **customer**, I want to request a replacement card through the chatbot, so that I can get a new card quickly.
+24. As a **customer**, I want to transfer to a human agent at any time, so that I can get help with complex issues.
+25. As a **customer**, I want the chatbot to verify my identity securely, so that my account is protected.
+26. As a **customer**, I want clear confirmation before changes are made, so that I don't accidentally make mistakes.
+27. As a **customer**, I want to track the status of my requests, so that I know when to expect resolution.
 
-### 6.2 Guardrail Interface
+### Observability & Operations
 
-```python
-from dataclasses import dataclass
-
-@dataclass
-class GuardrailResult:
-    passed: bool
-    modified_text: str | None = None  # if redaction applied
-    violations: list[str] = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
-
-class BaseGuardrail:
-    """Teams subclass this to create custom guardrails."""
-
-    def __init__(self, config: dict):
-        self.config = config
-
-    async def check(self, text: str, context: dict) -> GuardrailResult:
-        raise NotImplementedError
-```
-
-### 6.3 Configuration in workflow.yaml
-
-```yaml
-guardrails:
-  mandatory:           # cannot remove — platform always runs these
-    - pii_detection
-    - harmful_content
-    - prompt_injection
-  optional:            # team chooses which to enable
-    - pii_redaction
-    - fraud_detection
-  custom:              # team-defined classes
-    - handler: "features.card_replacement.guardrails.CardNumberValidator"
-      config:
-        mask_full_number: true
-```
+28. As an **operations engineer**, I want all LLM calls traced in Langfuse, so that I can debug conversation flows.
+29. As an **operations engineer**, I want to see which guardrails triggered for each conversation, so that I can tune false positive rates.
+30. As an **operations engineer**, I want to monitor latency per node, so that I can identify performance bottlenecks.
+31. As an **operations engineer**, I want to view conversation transcripts with PII redacted, so that I can troubleshoot without exposure risk.
+32. As a **product manager**, I want to see completion rates per workflow, so that I can measure chatbot effectiveness.
+33. As a **product manager**, I want to see human handoff rates, so that I can identify flows that need improvement.
 
 ---
 
-## 7. Workflow Configuration Schema
+## Implementation Decisions
+
+### Architecture Overview
+
+**Current State:** Single repository with modular platform architecture  
+**Future State:** Platform can be extracted as a library for multi-repo teams
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           AI APPLICATION PLATFORM                            │
+│                         (Single Repo, Modular Design)                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+│  │  Guardrails │  │   Langfuse  │  │    Auth     │  │   Human Handoff     │ │
+│  │   Module    │  │  Tracing    │  │   Module    │  │     Interface       │ │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                          WORKFLOW ENGINE (LangGraph)                         │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │  YAML Parser → Graph Builder → Node Executor → State Manager            ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────────────────────┤
+│                          PLATFORM NODE TYPES                                 │
+│  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐│
+│  │llm_response│ │llm_convers.│ │auth_challen│ │human_handof│ │  subgraph  ││
+│  └────────────┘ └────────────┘ └────────────┘ └────────────┘ └────────────┘│
+├─────────────────────────────────────────────────────────────────────────────┤
+│                          ROUTER TYPES                                        │
+│  ┌────────────┐ ┌────────────┐ ┌────────────────┐ ┌──────────────────────────┐│
+│  │ llm_intent │ │   direct   │ │validation_result│ │    custom (team)       ││
+│  └────────────┘ └────────────┘ └────────────────┘ └──────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+         ┌────────────────────────────┼────────────────────────────┐
+         │                            │                            │
+         ▼                            ▼                            ▼
+┌─────────────────┐        ┌─────────────────┐        ┌─────────────────┐
+│ Address Change  │        │ Account Activ.  │        │ Card Replacem.  │
+│  Config         │        │  Config         │        │  Config         │
+│  + Handlers     │        │  + Handlers     │        │  + Handlers     │
+│                 │        │                 │        │                 │
+│ Workflow        │        │ Workflow        │        │ Workflow        │
+└─────────────────┘        └─────────────────┘        └─────────────────┘
+```
+
+### Technology Stack
+
+| Component | Technology | Rationale |
+|-----------|------------|-----------|
+| Workflow Engine | LangGraph | Industry standard for agentic workflows, supports subgraphs and conditional routing |
+| Observability | Langfuse | Purpose-built for LLM observability, supports tracing, evaluation, and prompt management |
+| Guardrails | Guardrails AI + LangChain | Combine structural validation (Guardrails AI) with content filtering (LangChain) |
+| Package Manager | UV | Fast, reliable Python dependency management |
+| Configuration | YAML | Human-readable, version-controllable, easy to validate |
+| LLM Providers | OpenAI, Anthropic, Azure OpenAI | Support multiple providers with unified interface |
+
+### Workflow Configuration Format
+
+Teams define workflows in YAML with the following structure:
 
 ```yaml
 workflow:
-  name: string                       # unique identifier
-  description: string
-  model: string                      # default LLM (gpt-4o, claude-3.5-sonnet, etc.)
+  name: string                    # Unique workflow identifier
+  description: string             # Human-readable description
 
-  global_edges:                      # available from ANY node (e.g., human handoff)
+  llm:                            # Default LLM configuration
+    provider: string              # azure_openai | openai | anthropic | bedrock
+    model: string                 # gpt-4o, claude-3-opus, etc.
+    temperature: float            # 0.0 - 1.0 (default: 0.1)
+
+  global_edges:                   # Edges available from ANY node
     - trigger: llm_intent
       intent: string
       to: node_id
 
   guardrails:
-    mandatory: [string]
-    optional: [string]
-    custom: [{handler: string, config: object}]
+    mandatory: [string]           # Platform guardrails (cannot disable)
+    optional: [string]            # Team can enable/disable
 
   nodes:
     - id: string
-      type: llm_response | llm_conversation | auth_challenge | platform.human_handoff | subgraph | custom
-      handler: string                # Python dotted path (for custom type)
-      prompt_template: string        # Jinja2 file in feature's prompts/ dir
-      output_schema: string          # reference to schemas section
-      config: object                 # type-specific settings
+      type: platform_node_type | custom
+      handler: string             # Python handler path (for custom nodes)
+      prompt_template: string     # Jinja2 template path
+      output_schema: string       # Schema name for structured output
+      config: object              # Node-specific configuration
 
   edges:
+    # Unconditional edge — always routes to target
     - from: string
       to: string
 
-  conditional_edges:
+    # Conditional edge — explicit router type for auditability
     - from: string
-      router: llm_intent | direct | validation_result | custom
+      router: router_type         # llm_intent | validation_result | direct | custom
+      description: string         # Optional: explains the routing decision (shown in Langfuse)
       routes:
-        key: node_id
+        route_key: node_id                 # Short form
+        route_key:                         # Long form (when clarity matters)
+          to: node_id
+          label: "Human-readable reason"   # Shown in debug logs & Langfuse
 
 subgraphs:
-  name:
+  subgraph_name:
     description: string
     nodes: [...]
-    edges: [...]
-    conditional_edges: [...]
+    edges: [...]                  # Same edge format as above
 
 schemas:
   SchemaName:
@@ -272,347 +208,454 @@ schemas:
     required: [...]
 ```
 
----
+**Edge Format — Two Styles in One List:**
 
-## 8. Platform Node Types
+All edges live in a single `edges` list. Each edge is either:
+- **Unconditional**: `from` + `to` — always routes to the target node
+- **Conditional**: `from` + `router` + `routes` — routes based on the named router mechanism
 
-| Type | Purpose | Key Config |
-|---|---|---|
-| `llm_response` | Single LLM generation | `prompt_template` |
+**Route Value — Short and Long Form:**
+
+Both forms are valid and can be mixed within the same `routes` block:
+```yaml
+routes:
+  valid: show_confirmation                  # Short: just the target node
+  invalid:                                  # Long: target + human-readable label
+    to: collect_address
+    label: "Address failed USPS validation"
+```
+The `label` is optional and used for debugging, Langfuse trace metadata, and non-technical reviewers.
+
+**`description` Field:**
+
+Optional on every conditional edge. Describes *what question is being decided*. Appears in:
+- Langfuse trace spans (searchable, filterable)
+- Debug logs
+- Workflow documentation auto-generation
+
+### Platform Node Types
+
+| Type | Description | Config Options |
+|------|-------------|----------------|
+| `llm_response` | Generate a single LLM response | `prompt_template` |
 | `llm_conversation` | Multi-turn extraction with structured output | `prompt_template`, `output_schema` |
-| `auth_challenge` | Identity verification (account #, DOB, SSN last 4) | `method`, `max_attempts` |
-| `platform.human_handoff` | Transfer to live agent | `priority`, `reason`, `metadata` |
-| `subgraph` | Delegate to a named subgraph | `subgraph` |
-| `custom` | Team-provided async Python function | `handler` |
+| `auth_challenge` | Verify user identity | `method`, `max_attempts` |
+| `platform.human_handoff` | Transfer to human agent | `priority`, `reason` |
+| `subgraph` | Execute a named subgraph | `subgraph` |
+| `custom` | Team-provided Python handler | `handler` |
 
----
+### Router Types
 
-## 9. Handler Contract
+| Type | Description | How It Works | LLM Cost |
+|------|-------------|--------------|----------|
+| `llm_intent` | LLM classifies user intent | Platform sends conversation to LLM with intent options, returns matched route key | $$$ (1 LLM call per routing decision) |
+| `validation_result` | Route based on handler return | Handler returns `{result: "valid"}`, router matches to route key | Free |
+| `direct` | Unconditional routing | Always routes to the single specified node | Free |
+| `custom` | Team-defined routing logic | Handler returns route key directly | Depends on implementation |
 
-Every custom handler is a simple async function:
+**Choosing a router type:**
+- Use `llm_intent` when routing depends on **what the user said** (natural language understanding)
+- Use `validation_result` when routing depends on **what a handler computed** (code logic)
+- Use `direct` for unconditional transitions (can also use simple `from`/`to` edge instead)
+- Use `custom` for complex routing that doesn't fit the above patterns
 
-```python
-from platform_core.state import ConversationState
-from typing import Any
+### Guardrails Architecture
 
-async def my_handler(state: ConversationState, config: dict[str, Any]) -> dict[str, Any]:
-    """
-    Args:
-        state: Full conversation state (messages, extracted_data, user_context)
-        config: Node config from workflow.yaml
-
-    Returns:
-        {
-            "result": str,       # routing key (e.g., "success", "invalid")
-            "data": dict,        # merged into state.extracted_data
-            "message": str|None  # optional assistant message
-        }
-    """
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      GUARDRAILS PIPELINE                         │
+├─────────────────────────────────────────────────────────────────┤
+│  INPUT                                                           │
+│    │                                                             │
+│    ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ MANDATORY GUARDRAILS (Platform-enforced, cannot disable)    ││
+│  │  • pii_detection        - Detect SSN, credit cards, etc.    ││
+│  │  • harmful_content      - Block toxic/harmful content        ││
+│  │  • prompt_injection     - Detect injection attempts          ││
+│  └─────────────────────────────────────────────────────────────┘│
+│    │                                                             │
+│    ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ OPTIONAL GUARDRAILS (Team can enable/disable/configure)     ││
+│  │  • pii_redaction        - Redact detected PII               ││
+│  │  • address_validation   - Validate address format           ││
+│  │  • fraud_detection      - Flag suspicious patterns          ││
+│  │  • document_verification- Verify uploaded documents         ││
+│  └─────────────────────────────────────────────────────────────┘│
+│    │                                                             │
+│    ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ TEAM GUARDRAILS (Team-defined, additive)                    ││
+│  │  • Custom validators                                        ││
+│  │  • Domain-specific rules                                    ││
+│  └─────────────────────────────────────────────────────────────┘│
+│    │                                                             │
+│    ▼                                                             │
+│  OUTPUT (to LLM or next node)                                    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-This is intentionally minimal — teams import nothing beyond `ConversationState` and return a dict.
+### Deployment Model
 
----
+The platform supports two deployment modes from a single repository:
 
-## 10. Project Structure
+**Shared Deployment** (Default)
+- Multiple feature workflows run in the same process
+- Shared resources, lower infrastructure cost
+- Suitable for features with similar security requirements
+- Configuration-based isolation
+
+**Isolated Deployment** (On Request)
+- Feature workflow runs as separate process/container
+- Full resource isolation
+- Required for high-security or high-volume workflows
+- Independent scaling
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SHARED DEPLOYMENT                             │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │              Platform Process                              │  │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐          │  │
+│  │  │  Address    │ │  Account    │ │  Card       │          │  │
+│  │  │  Change     │ │  Activation │ │  Replacement│          │  │
+│  │  └─────────────┘ └─────────────┘ └─────────────┘          │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    ISOLATED DEPLOYMENT                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │  Process 1  │  │  Process 2  │  │  Process 3  │             │
+│  │  Address    │  │  Account    │  │  Card       │             │
+│  │  Change     │  │  Activation │  │  Replacement│             │
+│  └─────────────┘  └─────────────┘  └─────────────┘             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Future Multi-Repo Support:**
+
+The platform is designed with clear module boundaries. In the future, `src/platform/` can be:
+1. Extracted as a separate package (`ai-app-platform`)
+2. Published to PyPI / private registry
+3. Imported by teams in their own repositories
+
+This requires no changes to the core platform code—only packaging and distribution setup.
+
+### Project Structure
 
 ```
 ai-app-platform/
-├── pyproject.toml                     # UV workspace root
+├── pyproject.toml                    # UV project configuration
 ├── src/
-│   └── platform_core/                 # The shared platform library
+│   └── platform/
 │       ├── __init__.py
 │       ├── engine/
-│       │   ├── workflow_parser.py     # YAML → internal model
-│       │   ├── graph_builder.py       # Internal model → LangGraph StateGraph
-│       │   ├── node_executor.py       # Execute node with tracing + guardrails
-│       │   └── state.py              # ConversationState definition
+│       │   ├── __init__.py
+│       │   ├── workflow_parser.py    # YAML → LangGraph
+│       │   ├── graph_builder.py      # Build StateGraph from config
+│       │   ├── node_executor.py      # Execute nodes with tracing
+│       │   └── state_manager.py      # Conversation state
 │       ├── nodes/
-│       │   ├── base.py
-│       │   ├── llm_response.py
-│       │   ├── llm_conversation.py
-│       │   ├── auth_challenge.py
-│       │   └── human_handoff.py
+│       │   ├── __init__.py
+│       │   ├── llm_response.py       # llm_response node type
+│       │   ├── llm_conversation.py   # llm_conversation node type
+│       │   ├── auth_challenge.py     # auth_challenge node type
+│       │   └── human_handoff.py      # human_handoff node type
 │       ├── routers/
-│       │   ├── base.py
-│       │   ├── llm_intent.py
-│       │   └── validation_result.py
+│       │   ├── __init__.py
+│       │   ├── llm_intent.py         # LLM-based intent routing
+│       │   └── base.py               # Router interface
 │       ├── guardrails/
-│       │   ├── base.py               # BaseGuardrail + GuardrailResult
-│       │   ├── pipeline.py           # Orchestrates tier 1→2→3
+│       │   ├── __init__.py
+│       │   ├── pipeline.py           # Guardrails orchestration
 │       │   ├── pii_detection.py
-│       │   ├── pii_redaction.py
 │       │   ├── harmful_content.py
 │       │   └── prompt_injection.py
 │       ├── observability/
-│       │   ├── langfuse_tracer.py    # Auto-wraps all nodes with Langfuse spans
-│       │   └── metrics.py
-│       ├── auth/
-│       │   ├── base.py
-│       │   └── identity_verifier.py
-│       ├── llm/
-│       │   ├── provider.py           # Unified interface
-│       │   └── config.py             # Model registry
-│       └── discovery.py              # Scans features/ and loads workflows
-│
-├── features/                          # One directory per feature (team-owned)
+│       │   ├── __init__.py
+│       │   └── langfuse_tracer.py    # Langfuse integration
+│       └── auth/
+│           ├── __init__.py
+│           └── identity_verifier.py  # End-user authentication
+├── features/                          # Complete feature modules (one directory per feature)
 │   ├── address_change/
 │   │   ├── __init__.py
-│   │   ├── workflow.yaml
+│   │   ├── workflow.yaml             # Workflow configuration
 │   │   ├── handlers.py               # validate_with_usps, update_address_in_crm
-│   │   └── prompts/
+│   │   └── templates/
 │   │       ├── greeting.jinja2
 │   │       ├── collect_address.jinja2
-│   │       └── confirm_address.jinja2
+│   │       ├── confirm_address.jinja2
+│   │       └── address_updated.jinja2
 │   ├── account_activation/
 │   │   ├── __init__.py
-│   │   ├── workflow.yaml
-│   │   ├── handlers.py               # check_eligibility, activate_account
-│   │   └── prompts/
-│   ├── card_replacement/
-│   │   ├── __init__.py
-│   │   ├── workflow.yaml
-│   │   ├── handlers.py               # block_card, create_replacement_order
-│   │   └── prompts/
-│   └── _template/                     # Scaffold for new features
+│   │   ├── workflow.yaml             # Workflow configuration
+│   │   ├── handlers.py               # check_activation_eligibility, activate_account
+│   │   └── templates/
+│   │       ├── greeting.jinja2
+│   │       ├── account_preferences.jinja2
+│   │       └── activation_complete.jinja2
+│   └── card_replacement/
 │       ├── __init__.py
-│       ├── workflow.yaml.template
-│       ├── handlers.py.template
-│       └── prompts/
-│
+│       ├── workflow.yaml             # Workflow configuration
+│       ├── handlers.py               # block_stolen_card, create_card_replacement_order
+│       └── templates/
+│           ├── greeting.jinja2
+│           ├── claim_summary.jinja2
+│           └── replacement_confirmation.jinja2
 ├── tests/
-│   ├── platform_core/
+│   ├── platform/
+│   │   ├── test_workflow_parser.py
+│   │   ├── test_graph_builder.py
+│   │   └── test_guardrails.py
 │   └── features/
-├── docs/
-│   ├── PRD.md                         # ← this document
-│   └── onboarding.md
-└── scripts/
-    ├── new_feature.py                 # CLI: scaffold a new feature
-    └── run_feature.py                 # CLI: run a feature locally
+│       ├── test_address_change.py
+│       ├── test_account_activation.py
+│       └── test_card_replacement.py
+└── docs/
+    ├── PRD.md                        # This document
+    ├── architecture.md
+    └── feature-onboarding.md
 ```
 
----
+**Complete Feature Encapsulation:**
 
-## 11. Example: What a Team Actually Writes
+Each feature directory contains **everything** related to that feature:
+- ✅ `workflow.yaml` — Workflow configuration
+- ✅ `handlers.py` — Custom business logic
+- ✅ `templates/` — Jinja2 prompt templates
+- ✅ `__init__.py` — Python module marker
 
-**Team #1 (Address Change)** writes only:
+**Benefits:**
+- 🎯 **Single location** — Team works in one directory
+- 📦 **Easy extraction** — Just copy the feature folder to a new repo
+- 🔍 **Clear boundaries** — All feature code is self-contained
+- 🚀 **Simple onboarding** — New developers understand the structure instantly
 
-### `features/address_change/workflow.yaml` (~60 lines)
+**Platform Discovery:**
 
-Declares nodes, edges, which guardrails to enable, and which model to use.
+The platform discovers all features by scanning:
+```python
+# Platform automatically finds all features
+features = glob("features/*/workflow.yaml")
+```
 
-### `features/address_change/handlers.py` (~80 lines)
+### API Contracts
+
+**Handler Interface**
+
+All custom handlers must follow this interface:
 
 ```python
-async def validate_with_usps(state, config):
-    address = state.extracted_data
-    result = await usps_client.validate(address)
-    if result.valid:
-        return {"result": "valid", "data": {"standardized": result.standardized}}
-    return {"result": "invalid", "message": "That address couldn't be verified."}
+from typing import Any
+from platform.engine.state_manager import ConversationState
 
-async def update_address_in_crm(state, config):
-    await crm_client.update_address(state.user_id, state.extracted_data["standardized"])
-    return {"result": "success", "message": "Your address has been updated!"}
+async def handler_name(
+    state: ConversationState,
+    config: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Args:
+        state: Current conversation state (messages, extracted data, user context)
+        config: Node configuration from YAML
+    
+    Returns:
+        dict with:
+          - 'result': string key for routing (e.g., 'valid', 'invalid', 'success')
+          - 'data': any data to merge into state
+          - 'message': optional message to add to conversation
+    """
+    pass
 ```
 
-### `features/address_change/prompts/*.jinja2` (~30 lines total)
-
-Prompt templates for each conversational node.
-
-**Total team-owned code: ~170 lines.** Everything else (LangGraph wiring, guardrails, tracing, auth, handoff) comes from the platform.
-
----
-
-## 12. Shared "Transfer to Support" — Platform-Level Feature
-
-All three teams need "transfer to human support." This is a **platform-provided node type** (`platform.human_handoff`) and a **global edge pattern**:
-
-```yaml
-# In ANY workflow.yaml — just declare the global edge:
-global_edges:
-  - trigger: llm_intent
-    intent: transfer_support
-    to: human_handoff
-
-nodes:
-  - id: human_handoff
-    type: platform.human_handoff
-    config:
-      priority: normal
-      reason: customer_requested
-```
-
-The platform's LLM intent router automatically checks every user message against global edge intents **before** routing to the current node's local edges. If the user says "I want to talk to a person," the platform routes to `human_handoff` regardless of which node the conversation is currently in.
-
-Teams write **zero code** for this capability.
-
----
-
-## 13. Observability (Langfuse Integration)
-
-The platform auto-instruments every workflow execution:
-
-| What's Traced | Langfuse Concept | Automatic? |
-|---|---|---|
-| Full conversation | **Trace** | ✅ |
-| Each node execution | **Span** | ✅ |
-| LLM calls | **Generation** | ✅ |
-| Guardrail checks | **Span** (nested) | ✅ |
-| Handler duration + result | **Span** | ✅ |
-| Token usage + cost | **Generation metadata** | ✅ |
-| Prompt templates | **Prompt management** | ✅ (opt-in) |
-
-Teams get full observability **for free** — no code required. They can add custom Langfuse events in handlers if needed:
+**Guardrail Interface**
 
 ```python
-from platform_core.observability import current_trace
+from typing import Any
+from platform.guardrails.base import GuardrailResult
 
-async def my_handler(state, config):
-    current_trace().event(name="crm_call", metadata={"account": state.user_id})
-    ...
+class CustomGuardrail:
+    def __init__(self, config: dict[str, Any]):
+        self.config = config
+    
+    async def check(self, input_text: str, context: dict) -> GuardrailResult:
+        """
+        Returns:
+            GuardrailResult with:
+              - passed: bool
+              - modified_text: str (if redaction applied)
+              - violations: list of detected issues
+        """
+        pass
 ```
 
 ---
 
-## 14. Authentication Module
+## Testing Decisions
 
-Platform provides a configurable auth challenge node:
+### What Makes a Good Test
 
-| Method | What It Verifies | Config Key |
-|---|---|---|
-| `account_number_dob` | Account # + date of birth | Team #1 uses this |
-| `account_number_ssn_last4` | Account # + last 4 of SSN | Team #2, #3 use this |
-| `mfa_code` | One-time code sent to phone/email | Future |
-| `custom` | Team provides own verification handler | Full flexibility |
+Tests should verify **external behavior**, not implementation details:
+- Test that a workflow produces expected outputs for given inputs
+- Test that guardrails block/allow appropriate content
+- Test that handlers return correct results and state updates
+- Do NOT test internal method calls or LangGraph internals
 
-Teams select method in workflow.yaml. Platform handles retry logic, lockout, and audit logging.
+### Testing Strategy
 
----
+| Layer | Test Type | What to Test |
+|-------|-----------|--------------|
+| Platform Engine | Unit | YAML parsing, graph building, state management |
+| Platform Nodes | Unit | Each node type produces correct output |
+| Platform Routers | Unit | Intent classification, route selection |
+| Guardrails | Unit | PII detection accuracy, content filtering |
+| Feature Handlers | Unit | Business logic in isolation |
+| Feature Workflows | Integration | End-to-end conversation flows with mocked LLM |
+| Full Platform | E2E | Real LLM calls, complete workflows |
 
-## 15. Deployment Model
+### Test Examples
 
-### Phase 1: Single Process (Monolith)
+```python
+# Platform node test
+async def test_auth_challenge_success():
+    state = ConversationState(user_id="test_user")
+    node = AuthChallengeNode(config={"method": "account_number_dob"})
+    
+    # Simulate correct answers
+    state.add_message("user", "My account is 12345 and DOB is 01/15/1990")
+    result = await node.execute(state)
+    
+    assert result["result"] == "verified"
+    assert state.identity_verified == True
 
-All features run together in one process. The platform's discovery mechanism loads all `features/*/workflow.yaml` at startup and exposes them via a unified API (FastAPI/Starlette):
+# Feature handler test
+async def test_validate_with_usps_valid_address():
+    state = ConversationState()
+    state.extracted_data = {features/address_change/workflow
+        "street_address": "1600 Pennsylvania Ave NW",
+        "city": "Washington",
+        "state": "DC",
+        "zip_code": "20500"
+    }
+    
+    result = await validate_with_usps(state, {})
+    
+    assert result["result"] == "valid"
+    assert result["data"]["standardized_address"] is not None
 
+# Workflow integration test
+async def test_address_change_happy_path(mock_llm):
+    workflow = load_workflow("workflows/address_change.yaml")
+    
+    conversation = [
+        ("user", "Hi, I want to change my address"),
+        ("user", "Account 12345, DOB 01/15/1990"),  # Auth
+        ("user", "123 New Street, Springfield, IL 62701"),  # Address
+        ("user", "Yes, that's correct"),  # Confirm
+    ]
+    
+    result = await run_workflow(workflow, conversation)
+    
+    assert result.completed == True
+    assert result.final_node == "farewell"
+    assert "address_updated" in result.state.completed_actions
 ```
-POST /api/v1/{feature_name}/chat
-```
-
-### Phase 2: Feature Isolation (Optional)
-
-Features can be deployed as isolated containers. Since each feature is self-contained in its directory, extraction is trivial:
-
-```bash
-# Deploy only card_replacement
-uv run scripts/run_feature.py --feature card_replacement --port 8001
-```
-
-### Future: Library Extraction
-
-Platform core becomes a published package:
-
-```bash
-uv add ai-app-platform-core
-```
-
-Teams create their own repos with just their `features/` directory + a thin entry point.
 
 ---
 
-## 16. Developer Experience
+## Out of Scope
 
-### Scaffolding a New Feature
+The following are explicitly **out of scope** for the initial platform release:
 
-```bash
-uv run scripts/new_feature.py --name dispute_resolution
-# Creates features/dispute_resolution/ with workflow.yaml template, handlers.py, prompts/
-```
-
-### Running Locally
-
-```bash
-uv run scripts/run_feature.py --feature address_change
-# Starts local server with hot-reload, connects to Langfuse dev project
-```
-
-### Testing
-
-```bash
-uv run pytest tests/features/test_address_change.py
-# Runs with mocked LLM, verifies conversation flows end-to-end
-```
+1. **Real-time human handoff** — Platform provides an abstract interface; actual WebSocket/live agent integration is deferred
+2. **Multi-language support** — Initial release supports English only
+3. **Voice channel** — Text-based chatbot only; voice/telephony integration is future work
+4. **Custom LLM fine-tuning** — Teams use pre-trained models; fine-tuning infrastructure not provided
+5. **Visual workflow builder** — Teams define workflows in YAML; GUI editor is future enhancement
+6. **A/B testing framework** — Workflow variants and experimentation not included in v1
+7. **Billing/metering** — No per-team usage tracking or chargeback in initial release
+8. **Self-service deployment** — Central platform team deploys all applications
 
 ---
 
-## 17. Testing Strategy
+## Further Notes
 
-| Layer | Type | What to Verify |
-|---|---|---|
-| Platform engine | Unit | YAML parsing, graph construction, state management |
-| Built-in nodes | Unit | Correct LLM calls, output formatting |
-| Guardrails | Unit | Detection accuracy, redaction correctness |
-| Feature handlers | Unit | Business logic in isolation (mock external services) |
-| Feature workflows | Integration | End-to-end conversation with mocked LLM |
-| Full stack | E2E | Real LLM, real Langfuse, smoke tests |
+### Risks and Mitigations
 
----
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| YAML complexity grows | Teams struggle with large configs | Provide schema validation, IDE extension, and examples |
+| LLM routing unreliable | Conversations go to wrong nodes | Fine-tune intent prompts, add fallback handling, monitor routing accuracy |
+| Guardrails false positives | Legitimate requests blocked | Tune thresholds per workflow, provide bypass for verified users |
+| Performance bottlenecks | Slow response times | Cache LLM responses where appropriate, optimize guardrails pipeline |
 
-## 18. Success Metrics
+### Success Metrics
 
-| Metric | Target |
-|---|---|
-| Time from kickoff to production for new feature | < 4 weeks |
-| Lines of team-written code per feature | < 200 |
-| Conversation completion rate | > 80% |
-| Human handoff rate | < 15% |
-| Guardrail false positive rate | < 5% |
-| Langfuse trace coverage | 100% of conversations |
+| Metric | Target | How to Measure |
+|--------|--------|----------------|
+| Time to deploy new workflow | < 4 weeks | Track from kickoff to production |
+| Lines of custom code per feature | < 200 | Count feature-specific Python lines |
+| Conversation completion rate | > 80% | Langfuse funnel analysis |
+| Human handoff rate | < 15% | Track transfers per workflow |
+| Guardrail false positive rate | < 5% | Sample and review blocked conversations |
 
----
+### Phase 1 Deliverables
 
-## 19. Risks & Mitigations
-
-| Risk | Mitigation |
-|---|---|
-| YAML config becomes complex for advanced flows | Provide schema validation, IDE autocomplete via JSON Schema, scaffold tooling |
-| LLM intent routing misclassifies | Tunable intent prompts per feature; fallback to "ask_clarification" node; monitoring in Langfuse |
-| Guardrails false positives block legitimate requests | Per-feature threshold tuning; Langfuse dashboard for guardrail trigger rates |
-| Platform becomes bottleneck (all teams depend on core team) | Clear API contracts; teams can always drop to `custom` node/router type; semantic versioning |
-| Vendor lock-in (OpenAI) | LLM provider abstraction; swap model via single config change |
-
----
-
-## 20. Phase 1 Deliverables
-
-1. **Platform Core Engine** — YAML parser, graph builder, node executor, state manager
-2. **Built-in Node Types** — llm_response, llm_conversation, auth_challenge, human_handoff, subgraph, custom
-3. **Router Types** — llm_intent, direct, validation_result, custom
-4. **Guardrails Pipeline** — Mandatory (PII detection, harmful content, prompt injection) + optional + custom
-5. **Langfuse Integration** — Automatic tracing for all nodes, LLM calls, guardrail checks
-6. **LLM Provider Abstraction** — OpenAI + Anthropic via config
-7. **Three Reference Features** — address_change, account_activation, card_replacement
-8. **Developer Tooling** — `new_feature.py` scaffold, `run_feature.py` local runner
-9. **Documentation** — This PRD, architecture guide, feature onboarding guide
-10. **Test Suite** — Unit + integration tests for platform and all reference features
+1. Platform engine (YAML parser, graph builder, node executor)
+2. Core node types (llm_response, llm_conversation, auth_challenge, human_handoff)
+3. Core routers (llm_intent, direct)
+4. Mandatory guardrails (pii_detection, harmful_content, prompt_injection)
+5. Langfuse integration
+6. Three feature workflows deployed:
+   - Address Change
+   - Account Activation
+   - Card Replacement
+7. Documentation and feature onboarding guide
+8. Modular architecture with clean boundaries for future library extraction
 
 ---
 
-## 21. Open Questions
+## Appendix: Example Feature Workflows
 
-1. **State persistence** — Use LangGraph's built-in checkpointing (SQLite/Postgres) or custom?
-2. **Multi-turn session management** — WebSocket vs. stateless HTTP with session ID?
-3. **Secrets management** — Vault, AWS Secrets Manager, or env vars for v1?
-4. **CI/CD** — Shared pipeline or per-feature pipelines?
-5. **Rate limiting** — Platform-level or delegated to API gateway?
+See the following feature directories for complete implementations:
+
+- [Address Change Feature](../features/address_change/) — `workflow.yaml`, handlers, templates
+- [Account Activation Feature](../features/account_activation/) — `workflow.yaml`, handlers, templates
+- [Card Replacement Feature](../features/card_replacement/) — `workflow.yaml`, handlers, templates
+
+Each feature directory contains everything needed: workflow configuration, business logic handlers, and prompt templates.
 
 ---
 
-## Appendix: Feature Workflow Examples
+## Future: Multi-Repository Architecture
 
-See existing workflows:
-- [`features/address_change/workflow.yaml`](../features/address_change/workflow.yaml)
-- [`features/account_activation/workflow.yaml`](../features/account_activation/workflow.yaml)
-- [`features/card_replacement/workflow.yaml`](../features/card_replacement/workflow.yaml)
+The platform is designed to support future extraction into separate repositories:
 
+**Phase 2: Library Extraction**
+1. Extract `src/platform/` as standalone package
+2. Publish to PyPI / private registry as `ai-app-platform`
+3. Teams create their own repositories (organized by features they own)
+4. Teams install via: `uv add ai-app-platform`
+simply takes their feature directory:
+- Team A Repository: Copy entire `address_change/` directory (workflow.yaml + handlers.py + templates/)
+- Team B Repository: Copy entire `account_activation/` directory
+- Team C Repository: Copy entire `card_replacement/` directory
+
+**Benefits of Future Multi-Repo:**
+- ✅ Team autonomy (own repo, deployment, schedule)
+- ✅ Independent scaling per feature
+- ✅ Version flexibility (upgrade library independently)
+- ✅ Blast radius containment (issues in one feature don't affect others)
+- ✅ Deployment freedom (K8s, Lambda, VMs)
+- ✅ **Zero refactoring** — feature directory structure stays the same
+
+**No Code Changes Required:**  
+The modular design ensures that when teams move to separate repos:
+1. Install the platform library: `uv add ai-app-platform`
+2. Copy entire feature directory: `cp -r features/address_change/ team-repo/`
+3. Import platform: `from ai_app_platform import WorkflowEngine`
+4. Load workflow: `engine.load("address_change/workflow.yaml")
+2. Copy their feature's workflow YAML and handlers
+3. Import: `from platform import WorkflowEngine`
