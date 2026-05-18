@@ -1,0 +1,7 @@
+Would you like your replacement card sent to the address we have on file?
+
+{% if extracted_data.street_address is defined %}
+Current address: {{ extracted_data.street_address }}, {{ extracted_data.city }}, {{ extracted_data.state }} {{ extracted_data.zip_code }}
+{% else %}
+Please confirm or provide a shipping address.
+{% endif %}

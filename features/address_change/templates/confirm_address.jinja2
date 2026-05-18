@@ -1,0 +1,10 @@
+Please confirm the following address:
+
+{% if extracted_data.street_address is defined %}
+{{ extracted_data.street_address }}
+{{ extracted_data.city }}, {{ extracted_data.state }} {{ extracted_data.zip_code }}
+{% else %}
+(Address details will appear here)
+{% endif %}
+
+Is this correct? (yes / no, I need to change it)
