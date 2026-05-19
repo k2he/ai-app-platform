@@ -1,0 +1,63 @@
+# Base workflow — inherited by all features via `extends`
+#
+# Merge rules when a feature uses `extends`:
+#   llm:            feature fields override base fields (deep merge)
+#   global_edges:   feature list is appended to base list
+#   guardrails:     mandatory lists concatenated (features can add, not remove)
+#                   optional lists concatenated
+#   nodes:          merged by id — feature overrides individual fields;
+#                   `config` dicts are deep-merged
+#   edges:          base edges first, then feature edges appended
+#   subgraphs:      feature keys override base keys
+#   schemas:        feature keys override base keys
+
+workflow:
+  llm:
+    provider: azure_openai
+    model: gpt-4o
+    temperature: 0.1
+
+  global_edges:
+    - trigger: llm_intent
+      intent: transfer_support
+      to: human_handoff
+
+  guardrails:
+    mandatory:
+      - pii_detection
+      - max_length_check
+
+  nodes:
+    - id: greet
+      type: llm_response
+      prompt_template: "greeting.jinja2"
+
+    - id: verify_identity
+      type: auth_challenge
+      config:
+        method: account_number_ssn_last4
+        max_attempts: 3
+
+    - id: collect_intent
+      type: llm_response
+      prompt_template: "collect_intent.jinja2"
+
+    - id: human_handoff
+      type: platform.human_handoff
+
+    - id: farewell
+      type: llm_response
+      prompt_template: "farewell.jinja2"
+
+  edges:
+    - from: START
+      to: greet
+    - from: greet
+      to: verify_identity
+    - from: verify_identity
+      router: validation_result
+      description: "Did identity verification succeed?"
+      routes:
+        verified: collect_intent
+        failed: greet
+        max_attempts_exceeded: human_handoff

@@ -1,8 +1,8 @@
 # Product Requirements Document: AI Application Platform
 
-**Version:** 1.0  
-**Date:** May 15, 2026  
-**Status:** Draft  
+**Version:** 1.1  
+**Date:** May 19, 2026  
+**Status:** Implemented  
 **Type:** Demo / Proof-of-Concept  
 
 ---
@@ -181,23 +181,25 @@ Build an **Agentic AI Application Platform** in a single repository where teams 
 Teams define workflows in YAML with the following structure:
 
 ```yaml
+extends: ../../platform/workflows/_base.yaml  # Optional — inherit from a base workflow
+
 workflow:
   name: string                    # Unique workflow identifier
   description: string             # Human-readable description
 
-  llm:                            # Default LLM configuration
+  llm:                            # Default LLM configuration (overrides base field-by-field)
     provider: string              # azure_openai | openai | anthropic | bedrock
     model: string                 # gpt-4o, claude-3-opus, etc.
     temperature: float            # 0.0 - 1.0 (default: 0.1)
 
-  global_edges:                   # Edges available from ANY node
+  global_edges:                   # Edges available from ANY node (concatenated with base)
     - trigger: llm_intent
       intent: string
       to: node_id
 
   guardrails:
-    mandatory: [string]           # Platform guardrails (cannot disable)
-    optional: [string]            # Team can enable/disable
+    mandatory: [string]           # Appended to base mandatory list (cannot remove base guardrails)
+    optional: [string]            # Appended to base optional list
 
   nodes:
     - id: string
@@ -234,6 +236,22 @@ schemas:
     properties: {...}
     required: [...]
 ```
+
+**`extends` Key — Workflow Inheritance:**
+
+A feature workflow can inherit from a base workflow using `extends: <relative-path>`. The parser applies the following merge rules:
+
+| Section | Merge Rule |
+|---------|------------|
+| `llm` | Feature fields override base field-by-field |
+| `global_edges` | Concatenated — base first |
+| `guardrails.mandatory` | Concatenated, deduped — features can **add**, never remove |
+| `guardrails.optional` | Concatenated, deduped |
+| `nodes` | Merged by `id` — same id deep-merges `config`; new ids appended |
+| `edges` | Concatenated — base edges first, feature edges after |
+| `subgraphs` / `schemas` | Feature keys override base keys |
+
+The base workflow `platform/workflows/_base.yaml` defines the shared auth flow, common nodes (greet, verify_identity, collect_intent, human_handoff, farewell), and platform-wide guardrails. Feature workflows only declare their unique nodes and edges.
 
 **Edge Format — Two Styles in One List:**
 
@@ -282,9 +300,11 @@ Optional on every conditional edge. Describes *what question is being decided*. 
 
 **Choosing a router type:**
 - Use `llm_intent` when routing depends on **what the user said** (natural language understanding)
-- Use `validation_result` when routing depends on **what a handler computed** (code logic)
+- Use `validation_result` when routing depends on **what a handler computed** (code logic) — e.g. `auth_challenge` routes `verified → collect_intent`, `failed → greet`, `max_attempts_exceeded → human_handoff`
 - Use `direct` for unconditional transitions (can also use simple `from`/`to` edge instead)
 - Use `custom` for complex routing that doesn't fit the above patterns
+
+> **Auth flow pattern:** After `verify_identity` (`auth_challenge` node), always use `validation_result` to check whether authentication succeeded. Using `llm_intent` here would skip the auth result and route based on user message content instead.
 
 ### Guardrails Architecture
 
@@ -375,12 +395,15 @@ This requires no changes to the core platform code—only packaging and distribu
 ```
 ai-app-platform/
 ├── pyproject.toml                    # UV project configuration
+├── platform/
+│   └── workflows/
+│       └── _base.yaml                # Shared base workflow (auth flow, common nodes, guardrails)
 ├── src/
-│   └── platform/
+│   └── ai_platform/
 │       ├── __init__.py
 │       ├── engine/
 │       │   ├── __init__.py
-│       │   ├── workflow_parser.py    # YAML → LangGraph
+│       │   ├── workflow_parser.py    # YAML → ParsedWorkflow (supports extends)
 │       │   ├── graph_builder.py      # Build StateGraph from config
 │       │   ├── node_executor.py      # Execute nodes with tracing
 │       │   └── state_manager.py      # Conversation state
@@ -409,27 +432,30 @@ ai-app-platform/
 ├── features/                          # Complete feature modules (one directory per feature)
 │   ├── address_change/
 │   │   ├── __init__.py
-│   │   ├── workflow.yaml             # Workflow configuration
+│   │   ├── workflow.yaml             # extends _base.yaml; overrides auth method to account_number_dob
 │   │   ├── handlers.py               # validate_with_usps, update_address_in_crm
 │   │   └── templates/
 │   │       ├── greeting.jinja2
+│   │       ├── collect_intent.jinja2  # Post-auth intent collection
 │   │       ├── collect_address.jinja2
 │   │       ├── confirm_address.jinja2
 │   │       └── address_updated.jinja2
 │   ├── account_activation/
 │   │   ├── __init__.py
-│   │   ├── workflow.yaml             # Workflow configuration
+│   │   ├── workflow.yaml             # extends _base.yaml
 │   │   ├── handlers.py               # check_activation_eligibility, activate_account
 │   │   └── templates/
 │   │       ├── greeting.jinja2
+│   │       ├── collect_intent.jinja2  # Post-auth intent collection
 │   │       ├── account_preferences.jinja2
 │   │       └── activation_complete.jinja2
 │   └── card_replacement/
 │       ├── __init__.py
-│       ├── workflow.yaml             # Workflow configuration
+│       ├── workflow.yaml             # extends _base.yaml; adds pii_redaction guardrail
 │       ├── handlers.py               # block_stolen_card, create_card_replacement_order
 │       └── templates/
 │           ├── greeting.jinja2
+│           ├── collect_intent.jinja2  # Post-auth intent collection (replace vs track)
 │           ├── claim_summary.jinja2
 │           └── replacement_confirmation.jinja2
 ├── tests/
@@ -633,8 +659,11 @@ The following are explicitly **out of scope** for the initial platform release:
 ### Phase 1 Deliverables (Demo)
 
 1. Platform engine (YAML parser, graph builder, node executor)
+   - `extends` support in YAML parser — feature workflows inherit from `platform/workflows/_base.yaml`
+   - Merge rules: scalars override, lists concatenate, nodes merge by id, config dicts deep-merge
 2. Core node types (llm_response, llm_conversation, auth_challenge stub, human_handoff stub)
 3. Core routers (llm_intent, direct, validation_result)
+   - Debug logging: `[ROUTER]` and `[EDGE]` log lines for every routing decision
 4. Guardrails — working implementations:
    - `pii_detection` — Presidio-based PII detection
    - `max_length_check` — Blocks user input exceeding 250 words
@@ -642,13 +671,18 @@ The following are explicitly **out of scope** for the initial platform release:
 5. Langfuse — interface/stubs only (print/logging placeholder)
 6. Auth — mock verifier only (hardcoded values)
 7. Human handoff — stub that logs event and returns message
-8. **Card Replacement** — fully implemented (reference feature):
+8. **Base workflow template** (`platform/workflows/_base.yaml`):
+   - Shared LLM config, global transfer-to-support edge, mandatory guardrails
+   - Common nodes: greet, verify_identity, collect_intent, human_handoff, farewell
+   - Correct auth flow: `verify_identity` routes via `validation_result` (verified → collect_intent, failed → greet, max_attempts_exceeded → human_handoff)
+9. **Card Replacement** — fully implemented (reference feature):
    - All handlers with real business logic
-   - All Jinja2 templates
+   - All Jinja2 templates (including collect_intent.jinja2)
    - Both subgraphs (replacement + tracking)
-9. **Address Change** — minimal demo (workflow YAML + stub handlers + placeholder templates)
-10. **Account Activation** — minimal demo (workflow YAML + stub handlers + placeholder templates)
-11. Documentation and feature onboarding guide
+   - Feature-level mandatory guardrail addition (`pii_redaction`)
+10. **Address Change** — minimal demo (extends _base.yaml, overrides auth method to `account_number_dob`, stub handlers)
+11. **Account Activation** — minimal demo (extends _base.yaml, stub handlers)
+12. Documentation and feature onboarding guide
 
 ---
 
@@ -656,9 +690,10 @@ The following are explicitly **out of scope** for the initial platform release:
 
 See the following feature directories for complete implementations:
 
-- [Card Replacement Feature](../features/card_replacement/) — ✅ **Fully implemented** reference feature (workflow.yaml, handlers, templates, both subgraphs)
-- [Address Change Feature](../features/address_change/) — 🔲 Minimal demo (workflow.yaml + stub handlers + placeholder templates)
-- [Account Activation Feature](../features/account_activation/) — 🔲 Minimal demo (workflow.yaml + stub handlers + placeholder templates)
+- [platform/workflows/_base.yaml](../platform/workflows/_base.yaml) — ✅ Shared base workflow (auth flow, common nodes, platform guardrails)
+- [Card Replacement Feature](../features/card_replacement/) — ✅ **Fully implemented** reference feature (extends _base.yaml, handlers, templates, both subgraphs, pii_redaction guardrail)
+- [Address Change Feature](../features/address_change/) — ✅ Minimal demo (extends _base.yaml, overrides auth method to `account_number_dob`, stub handlers)
+- [Account Activation Feature](../features/account_activation/) — ✅ Minimal demo (extends _base.yaml, stub handlers)
 
 ---
 

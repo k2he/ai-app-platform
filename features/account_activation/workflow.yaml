@@ -1,56 +1,21 @@
 # Account Activation Workflow
-# Customer service chatbot for activating new accounts
+extends: ../../platform/workflows/_base.yaml
 
 workflow:
   name: account-activation
   description: Allow customers to activate their accounts
 
-  llm:
-    provider: azure_openai
-    model: gpt-4o
-    temperature: 0.1
-
-  global_edges:
-    - trigger: llm_intent
-      intent: transfer_support
-      to: human_handoff
-
-  guardrails:
-    mandatory:
-      - pii_detection
-      - max_length_check       # block inputs over 250 words
-    optional:
-      - document_verification
-
   nodes:
-    - id: greet
-      type: llm_response
-      prompt_template: "greeting.jinja2"
-
-    - id: verify_identity
-      type: auth_challenge
-      config:
-        method: account_number_ssn_last4
-        max_attempts: 3
-
-    - id: human_handoff
-      type: platform.human_handoff
-
     - id: activate_account
       type: subgraph
       subgraph: activation_flow
 
-    - id: farewell
-      type: llm_response
-      prompt_template: "farewell.jinja2"
+  guardrails:
+    optional:
+      - document_verification
 
   edges:
-    - from: START
-      to: greet
-    - from: greet
-      to: verify_identity
-
-    - from: verify_identity
+    - from: collect_intent
       router: llm_intent
       description: "What does the customer want to do?"
       routes:

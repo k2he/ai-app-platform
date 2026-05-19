@@ -61,12 +61,20 @@ def _make_node_fn(
     return node_fn
 
 
-def _make_validation_condition(routes: dict[str, str | RouteTarget]) -> Any:
+def _make_validation_condition(routes: dict[str, str | RouteTarget], description: str | None = None) -> Any:
     route_map = {k: _get_route_target(v) for k, v in routes.items()}
 
     def condition(state: ConversationState) -> str:
         last_result = state.user_context.get("_last_result", "")
-        return route_map.get(last_result, next(iter(route_map.values())))
+        target = route_map.get(last_result, next(iter(route_map.values())))
+
+        logger.info(
+            "[EDGE] validation_result: %s | result='%s' → '%s'",
+            description or "(no description)",
+            last_result,
+            target,
+        )
+        return target
 
     return condition, route_map
 
@@ -85,7 +93,15 @@ def _make_llm_intent_condition(
 
     async def condition(state: ConversationState) -> str:
         key = await router.route(state, routes={k: k for k in routes}, description=description)
-        return route_map.get(key, next(iter(route_map.values())))
+        target = route_map.get(key, next(iter(route_map.values())))
+
+        logger.info(
+            "[EDGE] llm_intent: %s | chose='%s' → '%s'",
+            description or "(no description)",
+            key,
+            target,
+        )
+        return target
 
     return condition, route_map
 
@@ -112,6 +128,7 @@ class GraphBuilder:
             src = _resolve_node_id(edge.from_node)
             if edge.to and not edge.router:
                 dst = _resolve_node_id(edge.to)
+                logger.debug("[EDGE] direct: %s → %s", src, dst)
                 graph.add_edge(src, dst)
                 continue
 
@@ -119,7 +136,7 @@ class GraphBuilder:
                 continue
 
             if edge.router == "validation_result":
-                condition, route_map = _make_validation_condition(edge.routes)
+                condition, route_map = _make_validation_condition(edge.routes, edge.description)
                 graph.add_conditional_edges(src, condition, route_map)
 
             elif edge.router in ("llm_intent", "direct", "custom"):

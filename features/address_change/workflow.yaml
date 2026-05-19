@@ -1,57 +1,26 @@
 # Address Change Workflow
-# Customer service chatbot for updating account addresses
+extends: ../../platform/workflows/_base.yaml
 
 workflow:
   name: address-change
   description: Allow customers to update their account address
 
-  llm:
-    provider: azure_openai
-    model: gpt-4o
-    temperature: 0.1
-
-  # Global edge - available from ANY node in this workflow
-  global_edges:
-    - trigger: llm_intent
-      intent: transfer_support
-      to: human_handoff
-
-  guardrails:
-    mandatory:
-      - pii_detection
-      - max_length_check       # block inputs over 250 words
-    optional:
-      - address_validation
-
+  # Override verify_identity: address change uses DOB instead of SSN
   nodes:
-    - id: greet
-      type: llm_response
-      prompt_template: "greeting.jinja2"
-
     - id: verify_identity
-      type: auth_challenge
       config:
         method: account_number_dob
-        max_attempts: 3
-
-    - id: human_handoff
-      type: platform.human_handoff
 
     - id: change_address
       type: subgraph
       subgraph: address_change_flow
 
-    - id: farewell
-      type: llm_response
-      prompt_template: "farewell.jinja2"
+  guardrails:
+    optional:
+      - address_validation
 
   edges:
-    - from: START
-      to: greet
-    - from: greet
-      to: verify_identity
-
-    - from: verify_identity
+    - from: collect_intent
       router: llm_intent
       description: "What does the customer want to do?"
       routes:

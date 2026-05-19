@@ -49,13 +49,26 @@ class LLMIntentRouter(BaseRouter):
         system_prompt = build_intent_prompt(routes, description)
         llm = self._get_llm()
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+
+        logger.info(
+            "[ROUTER] llm_intent deciding: %s | options=%s | user_input='%s'",
+            description or "(no description)",
+            list(routes.keys()),
+            user_message[:100] + "..." if len(user_message) > 100 else user_message,
+        )
+
         response = await llm.ainvoke(messages)
         route_key = response.content.strip().lower()
+
         if route_key not in routes:
             fallback = next(iter(routes))
             logger.warning(
-                "LLMIntentRouter: '%s' not in routes %s — falling back to '%s'",
-                route_key, list(routes.keys()), fallback,
+                "[ROUTER] llm_intent fallback: LLM returned '%s' (not in %s) → using '%s'",
+                route_key,
+                list(routes.keys()),
+                fallback,
             )
             return fallback
+
+        logger.info("[ROUTER] llm_intent chose: '%s'", route_key)
         return route_key

@@ -1,42 +1,18 @@
 # Card Replacement Workflow
-# Customer service chatbot for replacing lost/stolen/damaged cards
+extends: ../../platform/workflows/_base.yaml
 
 workflow:
   name: card-replacement
   description: Allow customers to request replacement cards (credit, debit, insurance)
 
-  llm:
-    provider: azure_openai
-    model: gpt-4o
-    temperature: 0.1
-
-  global_edges:
-    - trigger: llm_intent
-      intent: transfer_support
-      to: human_handoff
-
+  # card-replacement adds pii_redaction on top of the base mandatory guardrails
   guardrails:
     mandatory:
-      - pii_detection
-      - max_length_check       # block inputs over 250 words
-      - pii_redaction          # protect card numbers
+      - pii_redaction
     optional:
       - fraud_detection
 
   nodes:
-    - id: greet
-      type: llm_response
-      prompt_template: "greeting.jinja2"
-
-    - id: verify_identity
-      type: auth_challenge
-      config:
-        method: account_number_ssn_last4
-        max_attempts: 3
-
-    - id: human_handoff
-      type: platform.human_handoff
-
     - id: replace_card
       type: subgraph
       subgraph: card_replacement_flow
@@ -45,17 +21,8 @@ workflow:
       type: subgraph
       subgraph: card_tracking_flow
 
-    - id: farewell
-      type: llm_response
-      prompt_template: "farewell.jinja2"
-
   edges:
-    - from: START
-      to: greet
-    - from: greet
-      to: verify_identity
-
-    - from: verify_identity
+    - from: collect_intent
       router: llm_intent
       description: "What does the customer need help with?"
       routes:

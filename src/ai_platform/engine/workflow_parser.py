@@ -94,8 +94,72 @@ class ParsedWorkflow(BaseModel):
     schemas: dict[str, dict] = Field(default_factory=dict)
 
 
+def _merge_workflow_data(base: dict, feature: dict) -> dict:
+    base_wf: dict = base.get("workflow", {})
+    feat_wf: dict = feature.get("workflow", {})
+    merged_wf: dict = {}
+
+    # Scalars: feature wins
+    for key in ("name", "description"):
+        if key in feat_wf:
+            merged_wf[key] = feat_wf[key]
+        elif key in base_wf:
+            merged_wf[key] = base_wf[key]
+
+    # LLM: field-level override
+    merged_wf["llm"] = {**base_wf.get("llm", {}), **feat_wf.get("llm", {})}
+
+    # Global edges: concatenate (base first)
+    merged_wf["global_edges"] = (
+        base_wf.get("global_edges", []) + feat_wf.get("global_edges", [])
+    )
+
+    # Guardrails: mandatory concatenated (features add, never remove); optional concatenated
+    base_gr = base_wf.get("guardrails", {})
+    feat_gr = feat_wf.get("guardrails", {})
+    merged_wf["guardrails"] = {
+        "mandatory": list(
+            dict.fromkeys(base_gr.get("mandatory", []) + feat_gr.get("mandatory", []))
+        ),
+        "optional": list(
+            dict.fromkeys(base_gr.get("optional", []) + feat_gr.get("optional", []))
+        ),
+    }
+
+    # Nodes: merge by id — feature overrides individual fields; config dicts deep-merged
+    base_nodes: dict = {n["id"]: dict(n) for n in base_wf.get("nodes", [])}
+    for node in feat_wf.get("nodes", []):
+        nid = node["id"]
+        if nid in base_nodes:
+            merged_node = {**base_nodes[nid], **node}
+            if "config" in base_nodes[nid] and "config" in node:
+                merged_node["config"] = {**base_nodes[nid]["config"], **node["config"]}
+            base_nodes[nid] = merged_node
+        else:
+            base_nodes[nid] = dict(node)
+    merged_wf["nodes"] = list(base_nodes.values())
+
+    # Edges: base first, then feature appended
+    merged_wf["edges"] = base_wf.get("edges", []) + feat_wf.get("edges", [])
+
+    result: dict = {"workflow": merged_wf}
+
+    # Subgraphs and schemas: feature keys override base keys
+    result["subgraphs"] = {**base.get("subgraphs", {}), **feature.get("subgraphs", {})}
+    result["schemas"] = {**base.get("schemas", {}), **feature.get("schemas", {})}
+
+    return result
+
+
 def parse_workflow_file(path: str | Path) -> ParsedWorkflow:
     path = Path(path)
     with path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
+
+    if "extends" in data:
+        base_path = (path.parent / data["extends"]).resolve()
+        with base_path.open(encoding="utf-8") as f:
+            base_data = yaml.safe_load(f)
+        data = _merge_workflow_data(base_data, data)
+
     return ParsedWorkflow.model_validate(data)
