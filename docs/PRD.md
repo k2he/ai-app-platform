@@ -27,7 +27,7 @@
 
 | Feature | Depth | What to Implement |
 |---------|-------|-------------------|
-| **Card Replacement** | ✅ Full implementation | Complete workflow with all handlers, templates, subgraphs (replacement + tracking). This is the **reference feature** demonstrating the full platform capability. |
+| **Reduce Credit Limit** | ✅ Full implementation | Complete workflow with all handlers, templates, subgraphs (reduce flow + tracking flow). This is the **reference feature** demonstrating the full platform capability. |
 | **Address Change** | 🔲 Minimal demo | Workflow YAML fully defined. Handlers return mock/hardcoded data. Templates are simple placeholders. Enough to show a second feature running on the platform. |
 | **Account Activation** | 🔲 Minimal demo | Same as address change — workflow YAML defined, stub handlers, placeholder templates. Demonstrates a third feature with different guardrails (document_verification). |
 
@@ -43,7 +43,7 @@ Enterprise teams in insurance and financial services organizations want to build
 4. **No observability standard** — Each team implements their own logging/tracing, making cross-application monitoring difficult
 5. **Slow time-to-market** — Building foundational infrastructure delays business value delivery
 
-Development teams should focus on their **business logic** (address changes, account activation, card replacement) while the platform handles cross-cutting concerns. The codebase is organized by **features**, not by team names, enabling clean separation and future multi-repository extraction.
+Development teams should focus on their **business logic** (address changes, account activation, credit limit management) while the platform handles cross-cutting concerns. The codebase is organized by **features**, not by team names, enabling clean separation and future multi-repository extraction.
 
 ---
 
@@ -51,7 +51,7 @@ Development teams should focus on their **business logic** (address changes, acc
 
 Build an **Agentic AI Application Platform** in a single repository where teams define workflows in **YAML configuration** and implement only their custom business logic in Python. The platform provides all common modules (guardrails, authentication, observability, LLM orchestration) as an internal library.
 
-**Repository Organization:** The codebase is organized by **features** (address_change, account_activation, card_replacement), not by team names. This enables:
+**Repository Organization:** The codebase is organized by **features** (address_change, account_activation, reduce_credit_limit), not by team names. This enables:
 - Clean separation of concerns
 - Feature ownership by different teams
 - Easy extraction to multi-repo when needed
@@ -103,7 +103,7 @@ Build an **Agentic AI Application Platform** in a single repository where teams 
 
 21. As a **customer**, I want to change my address through the chatbot, so that I don't have to call customer service.
 22. As a **customer**, I want to activate my account through the chatbot, so that I can start using services immediately.
-23. As a **customer**, I want to request a replacement card through the chatbot, so that I can get a new card quickly.
+23. As a **customer**, I want to reduce my credit card limit through the chatbot, so that I can better manage my spending.
 24. As a **customer**, I want to transfer to a human agent at any time, so that I can get help with complex issues.
 25. As a **customer**, I want the chatbot to verify my identity securely, so that my account is protected.
 26. As a **customer**, I want clear confirmation before changes are made, so that I don't accidentally make mistakes.
@@ -157,8 +157,8 @@ Build an **Agentic AI Application Platform** in a single repository where teams 
          │                            │                            │
          ▼                            ▼                            ▼
 ┌─────────────────┐        ┌─────────────────┐        ┌─────────────────┐
-│ Address Change  │        │ Account Activ.  │        │ Card Replacem.  │
-│  Config         │        │  Config         │        │  Config         │
+│ Address Change  │        │ Account Activ.  │        │ Reduce Credit   │
+│  Config         │        │  Config         │        │  Limit Config   │
 │  + Handlers     │        │  + Handlers     │        │  + Handlers     │
 │                 │        │                 │        │                 │
 │ Workflow        │        │ Workflow        │        │ Workflow        │
@@ -365,8 +365,8 @@ The platform supports two deployment modes from a single repository:
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │              Platform Process                              │  │
 │  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐          │  │
-│  │  │  Address    │ │  Account    │ │  Card       │          │  │
-│  │  │  Change     │ │  Activation │ │  Replacement│          │  │
+│  │  │  Address    │ │  Account    │ │  Reduce     │          │  │
+│  │  │  Change     │ │  Activation │ │  Credit Lmt │          │  │
 │  │  └─────────────┘ └─────────────┘ └─────────────┘          │  │
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
@@ -375,8 +375,8 @@ The platform supports two deployment modes from a single repository:
 │                    ISOLATED DEPLOYMENT                           │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
 │  │  Process 1  │  │  Process 2  │  │  Process 3  │             │
-│  │  Address    │  │  Account    │  │  Card       │             │
-│  │  Change     │  │  Activation │  │  Replacement│             │
+│  │  Address    │  │  Account    │  │  Reduce     │             │
+│  │  Change     │  │  Activation │  │  Credit Lmt │             │
 │  └─────────────┘  └─────────────┘  └─────────────┘             │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -449,15 +449,21 @@ ai-app-platform/
 │   │       ├── collect_intent.jinja2  # Post-auth intent collection
 │   │       ├── account_preferences.jinja2
 │   │       └── activation_complete.jinja2
-│   └── card_replacement/
+│   └── reduce_credit_limit/
 │       ├── __init__.py
-│       ├── workflow.yaml             # extends _base.yaml; adds pii_redaction guardrail
-│       ├── handlers.py               # block_stolen_card, create_card_replacement_order
+│       ├── workflow.yaml             # extends _base.yaml; adds credit_validation guardrail
+│       ├── handlers.py               # validate_reduction_request, apply_credit_reduction, etc.
 │       └── templates/
 │           ├── greeting.jinja2
-│           ├── collect_intent.jinja2  # Post-auth intent collection (replace vs track)
-│           ├── claim_summary.jinja2
-│           └── replacement_confirmation.jinja2
+│           ├── collect_intent.jinja2  # Post-auth intent collection (reduce vs track)
+│           ├── current_limit_info.jinja2
+│           ├── enter_new_limit.jinja2
+│           ├── confirm_reduction.jinja2
+│           ├── reduction_complete.jinja2
+│           ├── limit_too_low.jinja2
+│           ├── pending_changes_status.jinja2
+│           ├── no_pending_changes.jinja2
+│           └── cancel_confirmation.jinja2
 ├── tests/
 │   ├── platform/
 │   │   ├── test_workflow_parser.py
@@ -466,7 +472,7 @@ ai-app-platform/
 │   └── features/
 │       ├── test_address_change.py
 │       ├── test_account_activation.py
-│       └── test_card_replacement.py
+│       └── test_reduce_credit_limit.py
 └── docs/
     ├── PRD.md                        # This document
     ├── architecture.md
@@ -675,11 +681,11 @@ The following are explicitly **out of scope** for the initial platform release:
    - Shared LLM config, global transfer-to-support edge, mandatory guardrails
    - Common nodes: greet, verify_identity, collect_intent, human_handoff, farewell
    - Correct auth flow: `verify_identity` routes via `validation_result` (verified → collect_intent, failed → greet, max_attempts_exceeded → human_handoff)
-9. **Card Replacement** — fully implemented (reference feature):
-   - All handlers with real business logic
+9. **Reduce Credit Limit** — fully implemented (reference feature):
+   - All handlers with real business logic (validate, check limits, apply reduction, track pending changes)
    - All Jinja2 templates (including collect_intent.jinja2)
-   - Both subgraphs (replacement + tracking)
-   - Feature-level mandatory guardrail addition (`pii_redaction`)
+   - Both subgraphs (reduce flow + limit change tracking)
+   - Optional guardrail: `credit_validation`
 10. **Address Change** — minimal demo (extends _base.yaml, overrides auth method to `account_number_dob`, stub handlers)
 11. **Account Activation** — minimal demo (extends _base.yaml, stub handlers)
 12. Documentation and feature onboarding guide
@@ -691,7 +697,7 @@ The following are explicitly **out of scope** for the initial platform release:
 See the following feature directories for complete implementations:
 
 - [platform/workflows/_base.yaml](../platform/workflows/_base.yaml) — ✅ Shared base workflow (auth flow, common nodes, platform guardrails)
-- [Card Replacement Feature](../features/card_replacement/) — ✅ **Fully implemented** reference feature (extends _base.yaml, handlers, templates, both subgraphs, pii_redaction guardrail)
+- [Reduce Credit Limit Feature](../features/reduce_credit_limit/) — ✅ **Fully implemented** reference feature (extends _base.yaml, handlers, templates, both subgraphs, credit_validation guardrail)
 - [Address Change Feature](../features/address_change/) — ✅ Minimal demo (extends _base.yaml, overrides auth method to `account_number_dob`, stub handlers)
 - [Account Activation Feature](../features/account_activation/) — ✅ Minimal demo (extends _base.yaml, stub handlers)
 
@@ -709,7 +715,7 @@ The platform is designed to support future extraction into separate repositories
 simply takes their feature directory:
 - Team A Repository: Copy entire `address_change/` directory (workflow.yaml + handlers.py + templates/)
 - Team B Repository: Copy entire `account_activation/` directory
-- Team C Repository: Copy entire `card_replacement/` directory
+- Team C Repository: Copy entire `reduce_credit_limit/` directory
 
 **Benefits of Future Multi-Repo:**
 - ✅ Team autonomy (own repo, deployment, schedule)

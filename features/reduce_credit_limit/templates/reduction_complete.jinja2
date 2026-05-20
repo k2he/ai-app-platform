@@ -1,0 +1,9 @@
+Your credit limit has been successfully reduced.
+
+**Change summary:**
+- **Previous limit:** ${{ old_limit | default("10,000") }}
+- **New limit:** ${{ new_limit | default("5,000") }}
+- **Effective date:** {{ effective_date | default("today") }}
+- **Reference ID:** {{ change_id | default("N/A") }}
+
+You will receive a confirmation by email or mail within 5–7 business days.

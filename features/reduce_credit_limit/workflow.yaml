@@ -1,0 +1,225 @@
+# Reduce Credit Limit Workflow
+extends: ../../platform/workflows/_base.yaml
+
+workflow:
+  name: reduce-credit-limit
+  description: Allow customers to reduce their credit card limit
+
+  guardrails:
+    optional:
+      - credit_validation
+
+  nodes:
+    - id: reduce_limit
+      type: subgraph
+      subgraph: reduce_credit_limit_flow
+
+    - id: track_request
+      type: subgraph
+      subgraph: limit_change_tracking_flow
+
+  edges:
+    - from: collect_intent
+      router: llm_intent
+      description: "What does the customer need help with?"
+      routes:
+        reduce_limit: reduce_limit
+        track_changes: track_request
+        other: greet
+
+    - from: reduce_limit
+      to: farewell
+    - from: track_request
+      to: farewell
+
+# ─────────────────────────────────────────────────────────
+# SUBGRAPH: Reduce Credit Limit Flow
+# ─────────────────────────────────────────────────────────
+subgraphs:
+  reduce_credit_limit_flow:
+    description: Multi-step flow to validate and apply a credit limit reduction
+
+    nodes:
+      - id: show_current_limit
+        type: llm_response
+        prompt_template: "current_limit_info.jinja2"
+
+      - id: collect_new_limit
+        type: llm_conversation
+        prompt_template: "enter_new_limit.jinja2"
+        output_schema: CreditLimitRequestSchema
+
+      - id: validate_reduction
+        type: custom
+        handler: "features.reduce_credit_limit.handlers.validate_reduction_request"
+
+      - id: check_minimum_limit
+        type: custom
+        handler: "features.reduce_credit_limit.handlers.check_minimum_limit"
+
+      - id: check_current_balance
+        type: custom
+        handler: "features.reduce_credit_limit.handlers.check_current_balance"
+
+      - id: show_confirm_reduction
+        type: llm_conversation
+        prompt_template: "confirm_reduction.jinja2"
+        output_schema: ConfirmReductionSchema
+
+      - id: apply_reduction
+        type: custom
+        handler: "features.reduce_credit_limit.handlers.apply_credit_reduction"
+
+      - id: reduction_complete
+        type: llm_response
+        prompt_template: "reduction_complete.jinja2"
+
+      - id: limit_too_low
+        type: llm_response
+        prompt_template: "limit_too_low.jinja2"
+
+    edges:
+      - from: START
+        to: show_current_limit
+
+      - from: show_current_limit
+        to: collect_new_limit
+
+      - from: collect_new_limit
+        to: validate_reduction
+
+      - from: validate_reduction
+        router: validation_result
+        description: "Is the requested new limit a valid number?"
+        routes:
+          valid: check_minimum_limit
+          invalid:
+            to: collect_new_limit
+            label: "Requested limit is not a valid number, re-prompt"
+
+      - from: check_minimum_limit
+        router: validation_result
+        description: "Is the new limit at or above the account minimum?"
+        routes:
+          valid: check_current_balance
+          below_minimum:
+            to: limit_too_low
+            label: "Requested limit is below the account minimum"
+
+      - from: check_current_balance
+        router: validation_result
+        description: "Is the new limit at or above the current balance?"
+        routes:
+          valid: show_confirm_reduction
+          below_balance:
+            to: limit_too_low
+            label: "Requested limit is below the current outstanding balance"
+
+      - from: limit_too_low
+        router: llm_intent
+        description: "Does the customer want to try a different amount?"
+        routes:
+          retry: collect_new_limit
+          cancel: END
+
+      - from: show_confirm_reduction
+        router: validation_result
+        description: "Did the customer confirm the reduction?"
+        routes:
+          confirmed: apply_reduction
+          cancelled: END
+
+      - from: apply_reduction
+        router: validation_result
+        description: "Was the credit limit updated successfully?"
+        routes:
+          success: reduction_complete
+          error: END
+
+      - from: reduction_complete
+        to: END
+
+  # ─────────────────────────────────────────────────────────
+  # SUBGRAPH: Limit Change Tracking Flow
+  # ─────────────────────────────────────────────────────────
+  limit_change_tracking_flow:
+    description: Allow customers to check the status of pending credit limit changes
+
+    nodes:
+      - id: fetch_pending_changes
+        type: custom
+        handler: "features.reduce_credit_limit.handlers.get_pending_limit_changes"
+
+      - id: no_pending_changes
+        type: llm_response
+        prompt_template: "no_pending_changes.jinja2"
+
+      - id: display_pending_status
+        type: llm_response
+        prompt_template: "pending_changes_status.jinja2"
+
+      - id: cancel_change
+        type: custom
+        handler: "features.reduce_credit_limit.handlers.cancel_pending_change"
+
+      - id: cancel_confirmed
+        type: llm_response
+        prompt_template: "cancel_confirmation.jinja2"
+
+    edges:
+      - from: START
+        to: fetch_pending_changes
+
+      - from: fetch_pending_changes
+        router: validation_result
+        description: "Are there pending limit change requests?"
+        routes:
+          found: display_pending_status
+          not_found: no_pending_changes
+
+      - from: display_pending_status
+        router: llm_intent
+        description: "Does the customer want to cancel the pending change?"
+        routes:
+          cancel: cancel_change
+          keep: END
+
+      - from: cancel_change
+        router: validation_result
+        description: "Was the pending change cancelled successfully?"
+        routes:
+          success: cancel_confirmed
+          error: display_pending_status
+
+      - from: cancel_confirmed
+        to: END
+      - from: no_pending_changes
+        to: END
+
+# ─────────────────────────────────────────────────────────
+# SCHEMAS: Structured output definitions
+# ─────────────────────────────────────────────────────────
+schemas:
+  CreditLimitRequestSchema:
+    type: object
+    properties:
+      requested_limit:
+        type: number
+        description: The new credit limit requested by the customer (in USD)
+        minimum: 0
+      currency:
+        type: string
+        default: USD
+    required: [requested_limit]
+
+  ConfirmReductionSchema:
+    type: object
+    properties:
+      confirmed:
+        type: boolean
+        description: Whether the customer confirmed the credit limit reduction
+      customer_reason:
+        type: string
+        maxLength: 500
+        description: Optional reason provided by the customer
+    required: [confirmed]

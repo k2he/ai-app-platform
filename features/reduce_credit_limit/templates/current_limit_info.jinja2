@@ -1,0 +1,8 @@
+Here is your current credit limit information:
+
+- **Current limit:** ${{ current_limit | default("10,000") }}
+- **Outstanding balance:** ${{ current_balance | default("3,200") }}
+- **Available credit:** ${{ available_credit | default("6,800") }}
+- **Minimum allowed limit:** ${{ minimum_limit | default("1,000") }}
+
+What new credit limit would you like to set? Please enter a dollar amount below your current limit (minimum: ${{ minimum_limit | default("1,000") }}).

@@ -1,0 +1,13 @@
+Here is the status of your pending credit limit change:
+
+{% for change in changes | default([]) %}
+- **Request ID:** {{ change.change_id }}
+  **Requested limit:** ${{ change.requested_limit | default("N/A") }}
+  **Status:** {{ change.status }}
+  **Submitted:** {{ change.submitted_at }}
+  **Estimated effective date:** {{ change.estimated_effective }}
+{% else %}
+No pending changes found.
+{% endfor %}
+
+Would you like to cancel this pending request, or are you satisfied?

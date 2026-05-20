@@ -1,0 +1,8 @@
+Please enter the new credit limit amount you would like (in US dollars).
+
+For example: "I'd like to set my limit to 5000" or just "5000".
+
+Note: The new limit must be:
+- Lower than your current limit of ${{ current_limit | default("10,000") }}
+- At least ${{ minimum_limit | default("1,000") }} (account minimum)
+- At least ${{ current_balance | default("3,200") }} to cover your current balance
