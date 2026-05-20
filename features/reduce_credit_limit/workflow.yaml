@@ -1,24 +1,57 @@
-# Reduce Credit Limit Workflow
+# ═══════════════════════════════════════════════════════════════════════════════
+# REDUCE CREDIT LIMIT WORKFLOW
+# ───────────────────────────────────────────────────────────────────────────────
+# Allows customers to lower their credit card limit. Inherits common nodes
+# (greet, verify_identity, collect_intent, human_handoff, farewell) and the
+# full auth flow from the platform base workflow.
+#
+# Entry point:  greet → verify_identity (validation_result) → collect_intent
+# Exit points:  reduce_limit → farewell
+#               track_request → farewell
+# ═══════════════════════════════════════════════════════════════════════════════
 extends: ../../platform/workflows/_base.yaml
 
 workflow:
   name: reduce-credit-limit
   description: Allow customers to reduce their credit card limit
 
+  # ── Guardrails ──────────────────────────────────────────────────────────────
+  # Mandatory guardrails (pii_detection, max_length_check) are inherited from
+  # the base workflow and cannot be removed. credit_validation is optional and
+  # specific to this feature — it checks that the new limit is a valid value.
   guardrails:
     optional:
       - credit_validation
 
+  # ── Feature-specific nodes ───────────────────────────────────────────────────
+  # Common nodes (greet, verify_identity, collect_intent, human_handoff,
+  # farewell) are inherited from _base.yaml and do not need to be redeclared.
   nodes:
+    # Runs the multi-step reduce flow: show current limit → collect new limit →
+    # validate → confirm → apply
     - id: reduce_limit
       type: subgraph
       subgraph: reduce_credit_limit_flow
 
+    # Runs the tracking flow: fetch pending changes → show status → optionally
+    # cancel the pending request
     - id: track_request
       type: subgraph
       subgraph: limit_change_tracking_flow
 
+  # ── Top-level edges ──────────────────────────────────────────────────────────
+  # BASE edges (inherited, do not redeclare):
+  #   START → greet → verify_identity
+  #   verify_identity --validation_result--> verified: collect_intent
+  #                                          failed: greet
+  #                                          max_attempts_exceeded: human_handoff
+  #
+  # FEATURE edges (declared below):
   edges:
+    # After identity is verified, the LLM classifies what the customer wants.
+    # "reduce_limit"  → customer wants to lower their credit limit
+    # "track_changes" → customer wants to check / cancel a pending request
+    # "other"         → unclear input, loop back to greeting
     - from: collect_intent
       router: llm_intent
       description: "What does the customer need help with?"
@@ -27,53 +60,89 @@ workflow:
         track_changes: track_request
         other: greet
 
+    # Both subgraphs exit unconditionally to farewell
     - from: reduce_limit
       to: farewell
     - from: track_request
       to: farewell
 
-# ─────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # SUBGRAPH: Reduce Credit Limit Flow
-# ─────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Guides the customer through three sequential validation gates before applying
+# the reduction. Any failed gate shows an error and offers a retry or cancel.
+#
+# Flow:
+#   show_current_limit → collect_new_limit → validate_reduction
+#     ├─(invalid)─────────────────────────→ collect_new_limit  (re-prompt)
+#     └─(valid)──→ check_minimum_limit
+#         ├─(below_minimum)───────────────→ limit_too_low
+#         └─(valid)──→ check_current_balance
+#             ├─(below_balance)───────────→ limit_too_low
+#             └─(valid)──→ show_confirm_reduction
+#                 ├─(cancelled)───────────→ END
+#                 └─(confirmed)──→ apply_reduction
+#                     ├─(error)───────────→ END
+#                     └─(success)─→ reduction_complete → END
+# ═══════════════════════════════════════════════════════════════════════════════
 subgraphs:
   reduce_credit_limit_flow:
     description: Multi-step flow to validate and apply a credit limit reduction
 
     nodes:
+      # Display current limit, outstanding balance, and minimum allowed limit
+      # so the customer can make an informed decision
       - id: show_current_limit
         type: llm_response
         prompt_template: "current_limit_info.jinja2"
 
+      # Extract the desired new limit from the customer's natural-language reply;
+      # produces CreditLimitRequestSchema { requested_limit: number }
       - id: collect_new_limit
         type: llm_conversation
         prompt_template: "enter_new_limit.jinja2"
         output_schema: CreditLimitRequestSchema
 
+      # Gate 1 — Structural check: is requested_limit a non-negative number?
+      # Routes: valid | invalid (re-prompt)
       - id: validate_reduction
         type: custom
         handler: "features.reduce_credit_limit.handlers.validate_reduction_request"
 
+      # Gate 2 — Business rule: new limit must be below current limit AND
+      # at or above the account's contractual minimum (e.g. $1,000)
+      # Routes: valid | below_minimum
       - id: check_minimum_limit
         type: custom
         handler: "features.reduce_credit_limit.handlers.check_minimum_limit"
 
+      # Gate 3 — Safety check: new limit must be >= current outstanding balance
+      # to avoid an immediate over-limit state
+      # Routes: valid | below_balance
       - id: check_current_balance
         type: custom
         handler: "features.reduce_credit_limit.handlers.check_current_balance"
 
+      # Show a summary of the proposed change and ask the customer to confirm;
+      # produces ConfirmReductionSchema { confirmed: bool }
       - id: show_confirm_reduction
         type: llm_conversation
         prompt_template: "confirm_reduction.jinja2"
         output_schema: ConfirmReductionSchema
 
+      # Call core-banking API to apply the approved reduction
+      # Routes: success | error
       - id: apply_reduction
         type: custom
         handler: "features.reduce_credit_limit.handlers.apply_credit_reduction"
 
+      # Confirmation screen shown after a successful reduction
       - id: reduction_complete
         type: llm_response
         prompt_template: "reduction_complete.jinja2"
 
+      # Error screen shown when a gate fails (below minimum or below balance);
+      # offers the customer a chance to retry with a different amount
       - id: limit_too_low
         type: llm_response
         prompt_template: "limit_too_low.jinja2"
@@ -88,6 +157,7 @@ subgraphs:
       - from: collect_new_limit
         to: validate_reduction
 
+      # Gate 1 result
       - from: validate_reduction
         router: validation_result
         description: "Is the requested new limit a valid number?"
@@ -97,6 +167,7 @@ subgraphs:
             to: collect_new_limit
             label: "Requested limit is not a valid number, re-prompt"
 
+      # Gate 2 result
       - from: check_minimum_limit
         router: validation_result
         description: "Is the new limit at or above the account minimum?"
@@ -106,6 +177,7 @@ subgraphs:
             to: limit_too_low
             label: "Requested limit is below the account minimum"
 
+      # Gate 3 result
       - from: check_current_balance
         router: validation_result
         description: "Is the new limit at or above the current balance?"
@@ -115,6 +187,7 @@ subgraphs:
             to: limit_too_low
             label: "Requested limit is below the current outstanding balance"
 
+      # After the error screen, let the customer try again or quit
       - from: limit_too_low
         router: llm_intent
         description: "Does the customer want to try a different amount?"
@@ -122,6 +195,7 @@ subgraphs:
           retry: collect_new_limit
           cancel: END
 
+      # Customer reviews and confirms (or cancels) the proposed change
       - from: show_confirm_reduction
         router: validation_result
         description: "Did the customer confirm the reduction?"
@@ -129,6 +203,7 @@ subgraphs:
           confirmed: apply_reduction
           cancelled: END
 
+      # Apply the change and handle success/failure
       - from: apply_reduction
         router: validation_result
         description: "Was the credit limit updated successfully?"
@@ -139,29 +214,51 @@ subgraphs:
       - from: reduction_complete
         to: END
 
-  # ─────────────────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════════════════════════════
   # SUBGRAPH: Limit Change Tracking Flow
-  # ─────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────────
+  # Looks up any in-progress limit change requests on the account and shows their
+  # status. Optionally allows the customer to cancel a pending request before it
+  # takes effect.
+  #
+  # Flow:
+  #   fetch_pending_changes
+  #     ├─(not_found)──→ no_pending_changes → END
+  #     └─(found)──────→ display_pending_status
+  #         ├─(keep)───→ END
+  #         └─(cancel)─→ cancel_change
+  #             ├─(error)──→ display_pending_status  (show updated status)
+  #             └─(success)→ cancel_confirmed → END
+  # ═══════════════════════════════════════════════════════════════════════════════
   limit_change_tracking_flow:
     description: Allow customers to check the status of pending credit limit changes
 
     nodes:
+      # Retrieve any pending (not-yet-effective) limit change requests from
+      # core-banking; sets state for display_pending_status or no_pending_changes
       - id: fetch_pending_changes
         type: custom
         handler: "features.reduce_credit_limit.handlers.get_pending_limit_changes"
 
+      # Shown when there are no pending requests — invites the customer to
+      # start a new reduction if they wish
       - id: no_pending_changes
         type: llm_response
         prompt_template: "no_pending_changes.jinja2"
 
+      # Renders a summary of each pending request with status and estimated
+      # effective date; offers a cancel option
       - id: display_pending_status
         type: llm_response
         prompt_template: "pending_changes_status.jinja2"
 
+      # Calls core-banking to cancel the pending request
+      # Routes: success | error (e.g. already processed)
       - id: cancel_change
         type: custom
         handler: "features.reduce_credit_limit.handlers.cancel_pending_change"
 
+      # Confirms the cancellation to the customer
       - id: cancel_confirmed
         type: llm_response
         prompt_template: "cancel_confirmation.jinja2"
@@ -170,6 +267,7 @@ subgraphs:
       - from: START
         to: fetch_pending_changes
 
+      # Branch based on whether pending requests exist
       - from: fetch_pending_changes
         router: validation_result
         description: "Are there pending limit change requests?"
@@ -177,6 +275,7 @@ subgraphs:
           found: display_pending_status
           not_found: no_pending_changes
 
+      # Customer decides to keep or cancel the pending change
       - from: display_pending_status
         router: llm_intent
         description: "Does the customer want to cancel the pending change?"
@@ -184,6 +283,7 @@ subgraphs:
           cancel: cancel_change
           keep: END
 
+      # Handle cancellation outcome; on error re-show the current status
       - from: cancel_change
         router: validation_result
         description: "Was the pending change cancelled successfully?"
@@ -196,10 +296,14 @@ subgraphs:
       - from: no_pending_changes
         to: END
 
-# ─────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # SCHEMAS: Structured output definitions
-# ─────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# Used by llm_conversation nodes to extract typed data from the customer's
+# natural-language responses.
+# ═══════════════════════════════════════════════════════════════════════════════
 schemas:
+  # Captures the new credit limit the customer wants to set
   CreditLimitRequestSchema:
     type: object
     properties:
@@ -212,6 +316,7 @@ schemas:
         default: USD
     required: [requested_limit]
 
+  # Captures whether the customer confirmed or cancelled the proposed change
   ConfirmReductionSchema:
     type: object
     properties:
